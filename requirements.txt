@@ -1,0 +1,14 @@
+yfinance==0.2.40
+pandas==3.0.3
+numpy==2.2.6
+scipy==1.13.0
+requests==2.32.3
+schedule==1.2.2
+python-dotenv==1.0.1
+pytz==2024.1
+tabulate==0.9.0
+flask==3.0.3
+flask-cors==4.0.1
+longbridge==4.0.5
+beautifulsoup4==4.12.3
+webull-openapi-python-sdk==2.0.7

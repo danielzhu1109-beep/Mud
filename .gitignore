@@ -1,0 +1,16 @@
+.env
+.venv/
+.idea/
+conf/
+__pycache__/
+*.pyc
+cache/
+reports/
+sim_trading/
+chart_library/
+*.log
+*.log.*
+server.out.log
+server.err.log
+webull_live_config.json
+webull_live_state.json

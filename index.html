@@ -1,0 +1,3692 @@
+﻿<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PlayMudOptionAnalysis</title>
+<style>
+/* ── 变量 & 重置 ── */
+:root {
+  --bg0:      #070b14;
+  --bg1:      #0b1120;
+  --bg2:      #10192d;
+  --bg3:      #16233b;
+  --bg4:      #1b2b45;
+  --border:   #223456;
+  --border2:  #17253d;
+  --green:    #4da3ff;
+  --green2:   #2d7ff9;
+  --green3:   #7cb7ff;
+  --green-dim:#2a6dde;
+  --green-bg: rgba(77,163,255,0.09);
+  --green-bg2:rgba(77,163,255,0.16);
+  --blue:     #4da3ff;
+  --red:      #ff3333;
+  --red-dim:  #cc2222;
+  --yellow:   #8cc8ff;
+  --cyan:     #7dd3fc;
+  --text0:    #eef5ff;
+  --text1:    #b9cbe6;
+  --text2:    #7990b2;
+  --text3:    #4e6689;
+  --mono:     'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  --sans:     'Sora', 'Noto Sans SC', sans-serif;
+  --scan-glow: 0 0 20px rgba(77,163,255,0.18);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:var(--sans);font-size:13px;overflow:hidden}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg1)}
+::-webkit-scrollbar-thumb{background:var(--green-dim);border-radius:2px}
+
+/* ── 整体布局 ── */
+.terminal{display:grid;grid-template-columns:330px 1fr;grid-template-rows:auto 1fr;height:100vh;overflow:hidden}
+
+/* ── 顶部栏 ── */
+.topbar{
+  grid-column:1/-1;
+  display:grid;
+  grid-template-columns:1.25fr auto auto auto;
+  gap:12px;
+  align-items:center;
+  padding:8px 16px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg1);
+  position:relative;
+}
+.topbar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--green-dim),transparent)}
+.brand-row{display:flex;flex-direction:column;gap:2px}
+.brand-sub{font-size:9px;color:var(--text2);letter-spacing:2px;text-transform:uppercase;font-family:var(--mono)}
+.brand-title{font-size:20px;font-weight:700;color:var(--green);letter-spacing:-0.5px;text-shadow:0 0 20px rgba(77,163,255,0.45)}
+.brand-desc{font-size:10px;color:var(--text2)}
+.topbar-center{display:flex;align-items:center;gap:10px;justify-content:center;flex-wrap:wrap}
+.topbar-box{
+  min-width:170px;
+  padding:8px 12px;
+  border:1px solid var(--border);
+  border-radius:4px;
+  background:var(--bg2);
+}
+.topbar-box-label{font-size:9px;color:var(--text2);font-family:var(--mono);letter-spacing:1.5px;text-transform:uppercase}
+.topbar-box-value{margin-top:3px;font-size:13px;font-weight:700;color:var(--green);font-family:var(--mono)}
+.topbar-box-sub{margin-top:2px;font-size:10px;color:var(--text2);font-family:var(--mono)}
+.topbar-actions{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.topbar-user{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  border:1px solid var(--border);border-radius:4px;background:var(--bg2);font-family:var(--mono);
+}
+.topbar-user-name{color:var(--green);font-size:12px;font-weight:700}
+.topbar-user-sub{color:var(--text2);font-size:10px}
+.topbar-action{
+  padding:8px 12px;border:1px solid var(--border);
+  background:var(--green-bg);color:var(--green);
+  border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono);
+}
+.topbar-action:hover{border-color:var(--green-dim);background:var(--green-bg2)}
+.scanner-badge{
+  display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+  padding:6px 14px;border:1px solid var(--green-dim);
+  background:var(--green-bg);border-radius:4px;
+  justify-self:end;
+}
+.scanner-label{font-size:9px;color:var(--green-dim);letter-spacing:2px;font-family:var(--mono)}
+.scanner-symbol{font-size:18px;font-weight:700;color:var(--green);font-family:var(--mono)}
+.live-dot{display:inline-block;width:6px;height:6px;background:var(--green);border-radius:50%;margin-right:6px;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 4px var(--green)}50%{opacity:.4;box-shadow:none}}
+
+.workspace-tabs{
+  grid-column:1/-1;
+  display:flex;
+  align-items:center;
+  gap:2px;
+  padding:0 12px;
+  border-bottom:1px solid var(--border);
+  background:#09111f;
+  min-height:40px;
+}
+.workspace-tab{
+  padding:10px 16px;
+  border:none;
+  border-radius:0;
+  border-top-left-radius:4px;
+  border-top-right-radius:4px;
+  background:transparent;
+  color:var(--text1);
+  font-size:12px;
+  cursor:pointer;
+  font-family:var(--sans);
+  transition:background .15s,color .15s,box-shadow .15s;
+  white-space:nowrap;
+}
+.workspace-tab:hover{
+  background:rgba(77,163,255,0.08);
+  color:var(--text0);
+}
+.workspace-tab.active{
+  background:rgba(77,163,255,0.12);
+  color:var(--green);
+  box-shadow:inset 0 -2px 0 var(--green);
+}
+.nav-anchor{
+  scroll-margin-top:96px;
+}
+.workspace-spotlight{
+  box-shadow:0 0 0 1px rgba(77,163,255,0.35), 0 0 20px rgba(77,163,255,0.12);
+  transition:box-shadow .25s ease;
+}
+
+/* ── 左侧面板 ── */
+.left-panel{
+  border-right:1px solid var(--border);
+  background:var(--bg1);
+  overflow-y:auto;
+  overflow-x:hidden;
+  display:flex;flex-direction:column;
+  animation:fadeSlideLeft .4s ease both;
+}
+@keyframes fadeSlideLeft{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+.section{padding:12px 14px;border-bottom:1px solid var(--border2)}
+.section:hover{background:rgba(77,163,255,0.025)}
+.section-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:8px;
+}
+.section-title{
+  font-size:9px;letter-spacing:2px;text-transform:uppercase;
+  color:var(--text2);font-family:var(--mono);margin-bottom:8px;
+}
+.section-head .section-title{margin-bottom:0}
+.section-toggle{
+  padding:4px 8px;
+  border:1px solid var(--border);
+  background:var(--bg3);
+  color:var(--text1);
+  border-radius:3px;
+  font-size:9px;
+  font-family:var(--mono);
+  cursor:pointer;
+  flex-shrink:0;
+}
+.section-toggle:hover{border-color:var(--green-dim);color:var(--green)}
+.section-body{display:block}
+.section.collapsed .section-body{display:none}
+.section.collapsed{padding-bottom:8px}
+.section.collapsed .section-head{margin-bottom:0}
+
+/* 扫描指令 */
+.cmd-textarea{
+  width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text0);
+  font-family:var(--sans);font-size:12px;padding:8px 10px;resize:vertical;
+  border-radius:3px;min-height:70px;outline:none;transition:border .2s;
+}
+.cmd-textarea:focus{border-color:var(--green-dim);box-shadow:var(--scan-glow)}
+.cmd-textarea::placeholder{color:var(--text3)}
+
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.field-label{font-size:9px;color:var(--text2);margin-bottom:3px;font-family:var(--mono)}
+.field-input{
+  width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text0);
+  font-family:var(--mono);font-size:12px;padding:5px 8px;border-radius:3px;outline:none;transition:border .2s;
+}
+.field-input:focus{border-color:var(--green-dim)}
+.field-select{
+  width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text0);
+  font-family:var(--mono);font-size:12px;padding:5px 8px;border-radius:3px;outline:none;
+}
+
+.toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:10px;gap:8px}
+.toggle-item{display:flex;align-items:center;gap:6px;flex:1}
+.toggle-item span{font-size:11px;color:var(--text1)}
+.toggle{position:relative;width:36px;height:18px;flex-shrink:0}
+.toggle input{display:none}
+.toggle-bg{
+  position:absolute;inset:0;border-radius:9px;background:var(--bg3);
+  border:1px solid var(--border);cursor:pointer;transition:.2s;
+}
+.toggle input:checked+.toggle-bg{background:var(--green);border-color:var(--green);box-shadow:0 0 8px rgba(77,163,255,.45)}
+.toggle-knob{
+  position:absolute;top:2px;left:2px;width:12px;height:12px;
+  background:var(--bg0);border-radius:50%;transition:.2s;
+}
+.toggle input:checked~.toggle-knob{left:20px;background:#fff}
+
+.scan-btn{
+  width:100%;margin-top:10px;padding:9px;
+  background:var(--green);color:#000;font-weight:700;font-size:13px;
+  border:none;border-radius:3px;cursor:pointer;letter-spacing:.5px;
+  transition:all .15s;position:relative;overflow:hidden;
+}
+.scan-btn:hover{background:var(--green3);box-shadow:0 0 20px rgba(77,163,255,.45)}
+.scan-btn:active{transform:scale(.98)}
+.scan-btn.loading{background:var(--green-dim);cursor:not-allowed}
+
+/* 历史对话 */
+.history-list{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto}
+.history-item{
+  font-size:11px;color:var(--text2);padding:5px 8px;border-radius:3px;cursor:pointer;
+  border-left:2px solid transparent;transition:.15s;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.history-item:hover{background:var(--bg3);color:var(--text1);border-left-color:var(--green-dim)}
+
+/* Auth */
+.auth-row{display:flex;align-items:center;justify-content:space-between}
+.auth-status{font-size:11px;font-family:var(--mono)}
+.auth-valid{color:var(--green)}
+.auth-info{font-size:10px;color:var(--text2);margin-top:4px}
+.webull-status-line{
+  margin-top:6px;
+  font-size:10px;
+  color:var(--text2);
+  font-family:var(--mono);
+  line-height:1.45;
+}
+.subpanel{
+  margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg2)
+}
+.subpanel-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px
+}
+.subpanel-title{
+  font-size:10px;color:var(--cyan);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase
+}
+.btn-row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.btn-sm{
+  flex:1;padding:5px;font-size:10px;background:var(--bg3);
+  border:1px solid var(--border);color:var(--text1);border-radius:3px;cursor:pointer;
+  font-family:var(--mono);transition:.15s;
+}
+.btn-sm:hover{border-color:var(--green-dim);color:var(--green)}
+.trade-live-btn{
+  padding:4px 8px;background:var(--bg3);border:1px solid var(--border);color:var(--cyan);
+  border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:9px;transition:.15s;
+}
+.trade-live-btn:hover{border-color:var(--cyan);color:var(--cyan)}
+
+/* AI Provider */
+.provider-list{display:flex;flex-direction:column;gap:4px}
+.provider-item{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  gap:6px;
+  padding:6px 8px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:3px;font-family:var(--mono);font-size:11px;align-items:start;
+}
+.provider-item.active{border-color:var(--green-dim);background:var(--green-bg)}
+.provider-enabled-row{display:flex;align-items:center;gap:6px;padding-top:6px}
+.provider-fields{display:grid;grid-template-columns:1fr 1.2fr 1.5fr 1.2fr;gap:4px;min-width:0}
+.provider-input{
+  width:100%;min-width:0;padding:4px 6px;border:1px solid var(--border2);
+  background:var(--bg1);color:var(--text1);border-radius:3px;font-size:10px;font-family:var(--mono);
+}
+.provider-input:focus{outline:none;border-color:var(--green-dim)}
+.provider-name{color:var(--text1)}
+.provider-del{color:var(--text3);cursor:pointer;font-size:10px;transition:.15s}
+.provider-del:hover{color:var(--red)}
+.provider-add{
+  margin-top:6px;padding:5px 8px;background:transparent;border:1px dashed var(--border);
+  color:var(--text2);font-size:11px;border-radius:3px;cursor:pointer;width:100%;
+  font-family:var(--mono);transition:.15s;
+}
+.provider-add:hover{border-color:var(--green-dim);color:var(--green)}
+
+/* ── 右侧主区域 ── */
+.right-panel{
+  display:grid;
+  grid-template-rows:auto auto auto auto auto;
+  overflow-y:auto;
+  overflow-x:hidden;
+  min-height:0;
+  background:var(--bg0);
+  animation:fadeIn .4s ease .1s both;
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* 状态卡 */
+.stat-cards{
+  display:grid;grid-template-columns:repeat(6,1fr);
+  border-bottom:1px solid var(--border);
+}
+.stat-card{
+  padding:10px 14px;border-right:1px solid var(--border);
+  position:relative;transition:.2s;
+}
+.stat-card:last-child{border-right:none}
+.stat-card:hover{background:var(--bg1)}
+.stat-card-label{font-size:9px;color:var(--text2);letter-spacing:1.5px;text-transform:uppercase;font-family:var(--mono)}
+.stat-card-value{
+  font-size:20px;font-weight:700;color:var(--green);
+  font-family:var(--mono);margin:3px 0 2px;letter-spacing:-0.5px;
+}
+.stat-card-value.neutral{color:var(--text0)}
+.stat-card-value.red{color:var(--red)}
+.stat-card-sub{font-size:10px;color:var(--text2);font-family:var(--mono)}
+.overview-strip{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+  padding:10px 14px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg, rgba(77,163,255,0.04), rgba(77,163,255,0.01));
+}
+.overview-pills{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.overview-pill{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border:1px solid var(--border);
+  border-radius:999px;
+  background:var(--bg1);
+  color:var(--text1);
+  font-family:var(--mono);
+  font-size:10px;
+}
+.overview-pill-label{color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-size:8px}
+.overview-pill-value{color:var(--text0)}
+.overview-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.overview-btn{
+  padding:6px 10px;
+  border:1px solid var(--border);
+  border-radius:4px;
+  background:var(--bg2);
+  color:var(--text1);
+  font-size:10px;
+  font-family:var(--mono);
+  cursor:pointer;
+}
+.overview-btn:hover{border-color:var(--green-dim);color:var(--green)}
+
+.account-box{
+  border:1px solid var(--border);
+  background:var(--bg2);
+  border-radius:4px;
+  padding:8px 10px;
+}
+.account-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.account-meta{padding:6px 7px;border:1px solid var(--border2);border-radius:3px;background:var(--bg1)}
+.account-label{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.account-value{font-size:11px;color:var(--green);font-family:var(--mono);margin-top:2px;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.account-actions{margin-top:8px}
+.account-default{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:var(--bg1);border:1px solid var(--border2);border-radius:3px;color:var(--text1);font-size:11px;font-family:var(--mono)}
+.status-badge{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;
+  border:1px solid var(--border2);background:var(--bg1);color:var(--text2);font-size:10px;font-family:var(--mono)
+}
+.status-badge.ok{border-color:rgba(38,208,124,.35);background:rgba(18,39,31,.85);color:var(--green)}
+.status-badge.warn{border-color:rgba(255,184,77,.35);background:rgba(52,42,20,.85);color:var(--orange)}
+.risk-list{
+  margin-top:8px;padding:8px 10px;border:1px solid var(--border2);border-radius:3px;background:var(--bg1);
+  color:var(--text1);font-size:10px;line-height:1.55
+}
+.risk-list strong{color:var(--orange)}
+.risk-item + .risk-item{margin-top:4px}
+.compare-panel{
+  margin-top:8px;border:1px solid var(--border2);background:var(--bg1);border-radius:3px;padding:8px 10px
+}
+.compare-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.compare-title{font-size:10px;color:var(--cyan);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.compare-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.compare-card{border:1px solid var(--border2);background:var(--bg0);border-radius:4px;padding:8px 10px}
+.compare-card-title{font-size:9px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px}
+.compare-card-main{font-size:11px;color:var(--text1);margin-top:4px;line-height:1.5;word-break:break-word}
+.compare-card-sub{font-size:10px;color:var(--text2);margin-top:4px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+.modal-mask{
+  position:fixed;inset:0;background:rgba(5,8,14,.78);display:none;align-items:center;justify-content:center;z-index:60;padding:20px
+}
+.modal-mask.show{display:flex}
+.modal-card{
+  width:min(760px,100%);max-height:min(88vh,900px);overflow:auto;background:var(--bg1);border:1px solid var(--border);
+  border-radius:6px;box-shadow:0 16px 50px rgba(0,0,0,.38);padding:14px
+}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.modal-title{font-size:14px;color:var(--text0);font-weight:700}
+.modal-close{
+  border:1px solid var(--border2);background:var(--bg2);color:var(--text2);border-radius:4px;padding:4px 10px;cursor:pointer;font-family:var(--mono)
+}
+.modal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.modal-meta{
+  border:1px solid var(--border2);background:var(--bg2);border-radius:4px;padding:8px 10px
+}
+.modal-meta-label{font-size:9px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px}
+.modal-meta-value{font-size:11px;color:var(--text1);font-family:var(--mono);margin-top:4px;line-height:1.5;word-break:break-word}
+.modal-block{
+  margin-top:10px;border:1px solid var(--border2);background:var(--bg2);border-radius:4px;padding:10px
+}
+.modal-block-title{font-size:10px;color:var(--cyan);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+.modal-json{
+  margin:0;font-size:10px;line-height:1.5;color:var(--text1);font-family:var(--mono);white-space:pre-wrap;word-break:break-word
+}
+
+/* 策略区 */
+.strategy-section{
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  background:var(--bg1);
+}
+.strategy-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.strategy-title{font-size:11px;color:var(--green);font-weight:600;letter-spacing:1px}
+.section-caption{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+.rescan-btn{
+  padding:4px 12px;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text1);font-size:10px;border-radius:3px;cursor:pointer;
+  font-family:var(--mono);transition:.15s;
+}
+.rescan-btn:hover{border-color:var(--green-dim);color:var(--green)}
+.strategy-title-h{font-size:12px;color:var(--green);font-weight:700;margin-bottom:6px}
+.strategy-summary{
+  margin-top:6px;
+  padding:8px 10px;
+  border:1px solid var(--border);
+  background:var(--bg2);
+  border-radius:4px;
+  color:var(--text1);
+  font-size:11px;
+  line-height:1.5;
+}
+.strategy-meta-row{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:6px;
+  margin:8px 0 10px;
+}
+.strategy-meta{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:6px 7px;
+}
+.strategy-meta-label{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.strategy-meta-value{font-size:11px;color:var(--green);font-family:var(--mono);margin-top:2px}
+.strategy-lines{display:flex;flex-direction:column;gap:3px}
+.strategy-line{font-size:11px;color:var(--text1);line-height:1.5;padding-left:4px}
+.strategy-line::before{content:'▸';color:var(--green-dim);margin-right:6px}
+.ai-brief{
+  margin-top:8px;padding:8px 10px;border:1px solid var(--border);
+  background:var(--bg2);border-radius:4px;color:var(--text1);
+  font-size:11px;line-height:1.5;font-family:var(--sans);
+}
+.analysis-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+.analysis-card{
+  border:1px solid var(--border);
+  background:var(--bg2);
+  border-radius:4px;
+  padding:8px 9px;
+}
+.analysis-card-title{font-size:10px;color:var(--cyan);font-weight:700;letter-spacing:1px;margin-bottom:6px}
+.analysis-bullets{display:flex;flex-direction:column;gap:4px}
+.analysis-bullet{font-size:11px;color:var(--text1);line-height:1.45;padding-left:4px}
+.analysis-bullet::before{content:'•';color:var(--green-dim);margin-right:6px}
+.scenario-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+.scenario-card{
+  border:1px solid var(--border);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:8px 9px;
+}
+.scenario-card-label{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.scenario-card-title{font-size:11px;color:var(--green);font-weight:700;margin-top:2px}
+.scenario-card-desc{font-size:11px;color:var(--text1);line-height:1.45;margin-top:5px}
+.scenario-card-meta{font-size:10px;color:var(--yellow);font-family:var(--mono);margin-top:5px}
+.risk-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.risk-item{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:6px 8px;
+  font-size:10px;
+  color:var(--text2);
+  font-family:var(--mono);
+  line-height:1.45;
+}
+.ai-rounds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.ai-round{
+  border:1px solid var(--border);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:8px 9px;
+}
+.ai-round-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:5px}
+.ai-round-name{font-size:10px;color:var(--cyan);font-weight:700;font-family:var(--mono)}
+.ai-round-tag{font-size:8px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px}
+.ai-round-body{font-size:11px;color:var(--text1);line-height:1.45;white-space:pre-wrap}
+
+/* 交易计划 */
+.trade-section{
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  background:var(--bg0);
+}
+.trade-header{
+  display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;
+}
+.trade-title{font-size:11px;color:var(--cyan);font-weight:600;letter-spacing:1px}
+.trade-sub{font-size:10px;color:var(--text2);font-family:var(--mono)}
+.trade-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px}
+.trade-card{
+  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
+  padding:9px 10px;overflow:hidden;
+}
+.trade-card-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px}
+.trade-card-name{font-size:12px;color:var(--text0);font-weight:700;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trade-card-badge{font-size:9px;font-weight:700;letter-spacing:1px;font-family:var(--mono);padding:1px 5px;border-radius:2px}
+.trade-card-badge.CALL{color:var(--green);background:rgba(77,163,255,.12);border:1px solid var(--green-dim)}
+.trade-card-badge.PUT{color:var(--red);background:rgba(255,51,51,.12);border:1px solid var(--red-dim)}
+.trade-card-line{font-size:10px;color:var(--text1);margin-top:4px;font-family:var(--mono)}
+.trade-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px}
+.trade-kpi{background:var(--bg1);border:1px solid var(--border2);border-radius:3px;padding:4px 5px}
+.trade-kpi-label{font-size:8px;color:var(--text3);font-family:var(--mono)}
+.trade-kpi-value{font-size:11px;color:var(--text0);font-family:var(--mono);margin-top:2px}
+.trade-kpi-value.pos{color:var(--green)}
+.trade-kpi-value.neg{color:var(--red)}
+.trade-note{margin-top:6px;font-size:10px;color:var(--yellow);font-family:var(--mono);line-height:1.4}
+
+/* 模拟交易 */
+.sim-section{
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  background:var(--bg1);
+}
+.sim-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px}
+.sim-title{font-size:11px;color:var(--blue);font-weight:600;letter-spacing:1px}
+.sim-sub{font-size:10px;color:var(--text2);font-family:var(--mono)}
+.sim-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-bottom:8px}
+.sim-card{
+  border:1px solid var(--border2);
+  background:var(--bg2);
+  border-radius:4px;
+  padding:6px 8px;
+}
+.sim-card-label{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.sim-card-value{font-size:12px;color:var(--text0);font-family:var(--mono);margin-top:2px;font-weight:700}
+.sim-card-value.pos{color:var(--green)}
+.sim-card-value.neg{color:var(--red)}
+.sim-toolbar{display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.sim-btn{
+  padding:4px 8px;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text1);font-size:9px;border-radius:3px;cursor:pointer;
+  font-family:var(--mono);transition:.15s;
+}
+.sim-btn:hover{border-color:var(--blue);color:var(--blue)}
+.sim-table-wrap{
+  max-height:260px;
+  overflow:auto;
+  border:1px solid var(--border);
+  border-radius:4px;
+  background:var(--bg0);
+}
+.sim-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px}
+.sim-table th,.sim-table td{border-bottom:1px solid var(--border2);padding:6px 4px;text-align:left;vertical-align:top}
+.sim-table th{position:sticky;top:0;background:var(--bg0);z-index:1;color:var(--text3);font-weight:400}
+.sim-table td{color:var(--text1)}
+.sim-open{color:var(--green)}
+.sim-close{color:var(--red)}
+.sim-mini-btn{
+  padding:2px 6px;
+  border:1px solid var(--border);
+  background:var(--bg2);
+  color:var(--text1);
+  border-radius:2px;
+  cursor:pointer;
+  font-family:var(--mono);
+  font-size:9px;
+}
+.sim-mini-btn:hover{border-color:var(--blue);color:var(--blue)}
+.sim-history{
+  margin-top:8px;
+  border:1px solid var(--border2);
+  background:var(--bg0);
+  border-radius:4px;
+  padding:8px 10px;
+  font-family:var(--mono);
+  font-size:10px;
+  color:var(--text2);
+  line-height:1.45;
+}
+.learning-panel{
+  margin-top:8px;
+  border:1px solid var(--border);
+  background:var(--bg2);
+  border-radius:4px;
+  padding:8px 10px;
+}
+.learning-panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.learning-panel-title{font-size:10px;color:var(--cyan);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.learning-panel-sub{font-size:10px;color:var(--text3);font-family:var(--mono)}
+.learning-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.learning-item{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:6px 7px;
+}
+.learning-item-label{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.learning-item-value{font-size:11px;color:var(--text1);font-family:var(--mono);margin-top:3px}
+.learning-summary{
+  margin-top:8px;
+  padding:8px 10px;
+  border:1px solid var(--border2);
+  border-radius:4px;
+  background:var(--bg0);
+  color:var(--text1);
+  font-size:11px;
+  line-height:1.5;
+}
+
+/* 经验库 */
+.library-tools{display:flex;gap:6px;margin-top:6px;align-items:center}
+.library-upload{
+  flex:1;padding:5px 8px;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text1);font-size:10px;border-radius:3px;cursor:pointer;font-family:var(--mono);
+}
+.library-refresh{
+  padding:5px 8px;background:transparent;border:1px solid var(--border);
+  color:var(--text1);font-size:10px;border-radius:3px;cursor:pointer;font-family:var(--mono);
+}
+.library-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;margin-top:8px}
+.library-item{
+  border:1px solid var(--border);background:var(--bg2);border-radius:4px;padding:6px;
+}
+.library-item-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.library-item-name{font-size:10px;color:var(--text0);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.library-item-meta{font-size:9px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+.library-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.tag-pill{
+  font-size:9px;color:var(--cyan);border:1px solid rgba(125,211,252,.3);
+  background:rgba(125,211,252,.08);padding:1px 4px;border-radius:999px;font-family:var(--mono);
+}
+.library-thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:3px;border:1px solid var(--border2);background:#000}
+.library-actions{display:flex;gap:4px;margin-top:4px}
+.library-mini{
+  flex:1;padding:4px 6px;background:var(--bg3);border:1px solid var(--border);color:var(--text1);
+  font-size:9px;border-radius:3px;cursor:pointer;font-family:var(--mono);
+}
+.library-progress{
+  margin-top:8px;
+  padding:6px 8px;
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  color:var(--text2);
+  font-size:10px;
+  font-family:var(--mono);
+  border-radius:3px;
+}
+.library-summary{
+  margin-top:8px;
+  padding:8px 10px;
+  border:1px solid var(--border);
+  background:var(--bg2);
+  border-radius:4px;
+  color:var(--text1);
+  font-size:11px;
+  line-height:1.5;
+}
+.profile-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.profile-card{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:7px 8px;
+}
+.profile-card-title{font-size:8px;color:var(--text3);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.profile-card-value{font-size:11px;color:var(--green);font-family:var(--mono);margin-top:2px}
+.profile-card-note{font-size:10px;color:var(--text2);margin-top:3px;line-height:1.4}
+
+/* Top50 */
+.top50-section{padding-top:10px}
+.top50-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.top50-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);font-family:var(--mono)}
+.top50-sub{font-size:9px;color:var(--text3);font-family:var(--mono)}
+.top50-actions{display:flex;gap:6px}
+.top50-btn{
+  padding:4px 8px;background:var(--bg3);border:1px solid var(--border);color:var(--text1);
+  font-size:9px;border-radius:3px;cursor:pointer;font-family:var(--mono);
+}
+.top50-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px}
+.top50-table th,.top50-table td{border-bottom:1px solid var(--border2);padding:6px 4px;text-align:left;vertical-align:top}
+.top50-table th{color:var(--text3);font-weight:400;position:sticky;top:0;background:var(--bg0);z-index:1}
+.top50-table td{color:var(--text1)}
+.top50-score{color:var(--green);font-weight:700}
+.top50-plan{color:var(--cyan)}
+.top50-symbol-btn{
+  color:var(--blue);
+  background:none;
+  border:none;
+  padding:0;
+  font:inherit;
+  cursor:pointer;
+  text-align:left;
+}
+.top50-symbol-btn:hover{text-decoration:underline}
+.top50-reason{color:var(--text2);line-height:1.45;white-space:normal;word-break:break-word}
+.top50-detail td{padding:4px 8px 10px;border-bottom:1px solid var(--border2);background:var(--bg0)}
+.top50-detail-box{display:flex;flex-direction:column;gap:4px}
+.top50-detail-line{color:var(--text2);line-height:1.45;white-space:normal;word-break:break-word}
+.top50-detail-line strong{color:var(--text1);font-weight:700}
+.top50-focus{
+  margin-top:8px;
+  border:1px solid var(--border);
+  border-radius:4px;
+  background:var(--bg1);
+  padding:10px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  font-family:var(--mono);
+}
+.top50-focus-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  color:var(--text2);
+  font-size:10px;
+}
+.top50-focus-title{color:var(--text1);font-size:10px}
+.top50-focus-main{color:var(--text1);line-height:1.5;white-space:normal;word-break:break-word}
+.top50-focus-sub{color:var(--text3);line-height:1.45;white-space:normal;word-break:break-word}
+.top50-wrap{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg1)}
+.unusual-section{padding-top:12px;margin-top:12px;border-top:1px solid var(--border2)}
+.unusual-wrap{max-height:330px}
+.unusual-chip{display:inline-flex;align-items:center;padding:2px 5px;border:1px solid var(--border);border-radius:3px;color:var(--cyan);font-size:9px}
+
+/* 图表区 */
+.charts-row{
+  display:grid;grid-template-columns:1fr 1fr;
+  border-bottom:1px solid var(--border);
+  overflow:hidden;
+  min-height:240px;
+}
+.chart-panel{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
+.chart-panel:last-child{border-right:none}
+.band-head{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:8px;
+  padding:10px 14px 8px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg1);
+}
+.band-title{font-size:11px;color:var(--text1);font-weight:700;letter-spacing:1px}
+.band-sub{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+.chart-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 12px;border-bottom:1px solid var(--border2);
+  font-size:10px;color:var(--text2);font-family:var(--mono);flex-shrink:0;
+}
+.chart-title{color:var(--text1);font-size:10px}
+.chart-canvas-wrap{flex:1;position:relative;overflow:hidden}
+canvas{display:block;width:100%!important;height:100%!important}
+
+/* 期权池 */
+.pool-section{overflow:visible;padding:10px 14px 18px;min-height:0}
+.pool-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;
+}
+.pool-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);font-family:var(--mono)}
+.pool-count{font-size:10px;color:var(--green-dim);font-family:var(--mono)}
+.pool-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.contract-card{
+  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
+  padding:9px 10px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden;
+}
+.contract-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--green);opacity:0;transition:.15s;
+}
+.contract-card:hover{border-color:var(--green-dim);background:var(--bg3)}
+.contract-card:hover::before{opacity:1}
+.contract-card.selected{border-color:var(--green);background:var(--green-bg)}
+.card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
+.card-num{font-size:9px;color:var(--text3);font-family:var(--mono)}
+.card-type{
+  font-size:9px;font-weight:700;letter-spacing:1px;padding:1px 5px;
+  border-radius:2px;font-family:var(--mono);
+}
+.card-type.CALL{background:rgba(77,163,255,.15);color:var(--green);border:1px solid var(--green-dim)}
+.card-type.PUT{background:rgba(255,51,51,.12);color:var(--red);border:1px solid var(--red-dim)}
+.card-name{font-size:10px;color:var(--text0);font-family:var(--mono);margin-bottom:2px;letter-spacing:.3px}
+.card-meta{font-size:9px;color:var(--text2);margin-bottom:6px;font-family:var(--mono)}
+.card-price{
+  display:flex;align-items:baseline;gap:6px;margin-bottom:3px;
+}
+.card-bidask{font-size:14px;font-weight:700;color:var(--green);font-family:var(--mono)}
+.card-spread{font-size:9px;color:var(--text2);font-family:var(--mono)}
+.card-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:2px}
+.card-stat{display:flex;flex-direction:column}
+.card-stat-label{font-size:8px;color:var(--text3);font-family:var(--mono)}
+.card-stat-value{font-size:10px;color:var(--text1);font-family:var(--mono)}
+.card-iv{font-size:10px;color:var(--yellow);font-family:var(--mono)}
+.card-greeks{
+  margin-top:5px;padding-top:5px;border-top:1px solid var(--border2);
+  display:grid;grid-template-columns:repeat(4,1fr);gap:2px;
+}
+.greek-item{display:flex;flex-direction:column;align-items:center}
+.greek-label{font-size:7px;color:var(--text3);font-family:var(--mono);text-transform:uppercase}
+.greek-val{font-size:9px;color:var(--cyan);font-family:var(--mono)}
+.card-actions{display:flex;justify-content:flex-end;gap:4px;margin-top:6px;flex-wrap:wrap}
+
+/* 空态 */
+.empty-state{
+  grid-column:1/-1;text-align:center;padding:40px;
+  color:var(--text3);font-family:var(--mono);font-size:12px;
+}
+.empty-state .e-icon{font-size:28px;margin-bottom:8px;opacity:.3}
+
+/* toast */
+.toast{
+  position:fixed;bottom:20px;right:20px;
+  background:var(--bg3);border:1px solid var(--green-dim);
+  padding:8px 16px;border-radius:4px;font-size:12px;color:var(--green);
+  font-family:var(--mono);z-index:999;
+  animation:toastIn .3s ease,toastOut .3s ease 2.5s forwards;
+}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(10px)}}
+
+/* 加载 */
+.spinner{
+  display:inline-block;width:12px;height:12px;
+  border:2px solid var(--bg3);border-top-color:var(--green);
+  border-radius:50%;animation:spin .6s linear infinite;
+  vertical-align:middle;margin-right:6px;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 错误 */
+.error-msg{
+  padding:8px 12px;background:rgba(255,51,51,.1);border:1px solid rgba(255,51,51,.3);
+  border-radius:3px;font-size:11px;color:var(--red);font-family:var(--mono);margin-top:8px;
+}
+
+/* 响应 */
+@media(max-width:1280px){
+  .terminal{grid-template-columns:310px 1fr}
+  .topbar{grid-template-columns:1fr auto}
+  .topbar-center,.topbar-actions{display:none}
+  .workspace-tabs{overflow:auto}
+  .stat-cards{grid-template-columns:repeat(3,1fr)}
+  .overview-strip{align-items:flex-start}
+  .pool-grid{grid-template-columns:repeat(2,1fr)}
+  .compare-grid{grid-template-columns:1fr}
+}
+@media(max-width:900px){
+  html,body{overflow:auto}
+  .terminal{display:block;height:auto;min-height:100vh;overflow:visible}
+  .topbar{position:sticky;top:0;z-index:20}
+  .left-panel{border-right:none;border-bottom:1px solid var(--border);max-height:none}
+  .right-panel{overflow:visible}
+  .overview-strip{padding:10px}
+  .charts-row{grid-template-columns:1fr}
+  .stat-cards{grid-template-columns:repeat(2,1fr)}
+  .analysis-grid,.scenario-grid,.ai-rounds,.sim-summary,.learning-grid{grid-template-columns:1fr}
+  .account-grid,.compare-grid,.modal-grid{grid-template-columns:1fr}
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+<div class="terminal">
+
+  <!-- ── 顶部栏 ── -->
+  <header class="topbar">
+    <div class="brand-row">
+      <div class="brand-sub">LONGBRIDGE · YFINANCE · AI COUNCIL</div>
+      <div class="brand-title">PlayMudOptionAnalysis</div>
+      <div class="brand-desc">输入自然语言，自动扫描日K、分时、新闻、期权链，并由单AI或"三个诸葛亮"小组给出一个单腿方案。</div>
+    </div>
+    <div class="topbar-center">
+      <div class="topbar-box">
+        <div class="topbar-box-label">美东时间</div>
+        <div class="topbar-box-value" id="topbar-clock">--:--:--</div>
+        <div class="topbar-box-sub" id="topbar-day">NYSE</div>
+      </div>
+      <div class="topbar-box">
+        <div class="topbar-box-label">任务标识</div>
+        <div class="topbar-box-value" id="topbar-task">succeeded</div>
+        <div class="topbar-box-sub">今日任务完成 100%</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div class="topbar-user">
+        <div>
+          <div class="topbar-user-name">admin</div>
+          <div class="topbar-user-sub">trading-a</div>
+        </div>
+        <button class="topbar-action" onclick="toast('退出')">退出</button>
+      </div>
+      <button class="topbar-action" onclick="toast('实盘交易')">实盘交易</button>
+    </div>
+    <div class="scanner-badge">
+      <div class="scanner-label"><span class="live-dot"></span>LIVE SCANNER</div>
+      <div class="scanner-symbol" id="badge-symbol">SPY</div>
+    </div>
+  </header>
+
+  <nav class="workspace-tabs" id="workspace-tabs">
+    <button class="workspace-tab active" data-target="summary-anchor" data-workspace="overview">总览</button>
+    <button class="workspace-tab" data-target="sim-anchor" data-workspace="positions">持仓</button>
+    <button class="workspace-tab" data-target="trade-anchor" data-workspace="signals">信号</button>
+    <button class="workspace-tab" data-target="sim-history" data-workspace="history">交易记录</button>
+    <button class="workspace-tab" data-target="learning-anchor" data-workspace="learning">学习引擎</button>
+    <button class="workspace-tab" data-target="pool-anchor" data-workspace="opportunities">机会榜</button>
+    <button class="workspace-tab" data-target="strategy-anchor" data-workspace="reports">报告</button>
+    <button class="workspace-tab" data-target="webull-risk-anchor" data-workspace="risk">风控</button>
+    <button class="workspace-tab" data-target="settings-anchor" data-workspace="settings">配置</button>
+  </nav>
+
+  <!-- ── 左侧 ── -->
+  <aside class="left-panel">
+
+    <!-- 扫描指令 -->
+    <div class="section nav-anchor" id="overview-anchor" data-workspace="overview signals reports opportunities">
+      <div class="section-title">扫描指令</div>
+      <div class="field-label">自然语言请求</div>
+      <textarea class="cmd-textarea" id="cmd-input" placeholder="例：扫描分析一下SPY稍微远一点、便宜一点、稍微彩票一点的单腿"></textarea>
+
+      <div class="row2">
+        <div>
+          <div class="field-label">Ticker 覆盖</div>
+          <input class="field-input" id="ticker-input" placeholder="例如 NVDA" value="SPY"/>
+        </div>
+        <div>
+          <div class="field-label">AI Provider</div>
+          <select class="field-select" id="ai-provider">
+            <option value="deepseek">deepseek</option>
+            <option value="qwen">qwen</option>
+            <option value="gemini">gemini</option>
+            <option value="ollama">ollama</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row2" style="margin-top:8px">
+        <div>
+          <div class="field-label">AI 分析模式</div>
+          <select class="field-select" id="ai-mode">
+            <option value="single">单个AI分析</option>
+            <option value="council">所有AI讨论后分析</option>
+          </select>
+        </div>
+        <div>
+          <div class="field-label">启用 AI</div>
+          <label class="toggle" style="margin-top:5px">
+            <input type="checkbox" id="toggle-ai" checked/>
+            <div class="toggle-bg"></div>
+            <div class="toggle-knob"></div>
+          </label>
+        </div>
+      </div>
+
+      <div class="row2" style="margin-top:8px">
+        <div class="toggle-item" style="justify-content:flex-start">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-council" checked/>
+            <div class="toggle-bg"></div>
+            <div class="toggle-knob"></div>
+          </label>
+          <span>三个诸葛亮</span>
+        </div>
+        <div style="font-size:10px;color:var(--text2);font-family:var(--mono);padding-top:6px">
+          启用后会自动使用前三个有效 AI 讨论再汇总
+        </div>
+      </div>
+
+      <div class="row2" style="margin-top:8px">
+        <div>
+          <div class="field-label">DTE 范围</div>
+          <div style="display:flex;gap:4px;align-items:center">
+            <input class="field-input" id="min-dte" type="number" value="5" style="width:50px"/>
+            <span style="color:var(--text2)">—</span>
+            <input class="field-input" id="max-dte" type="number" value="30" style="width:50px"/>
+          </div>
+        </div>
+        <div>
+          <div class="field-label">方向</div>
+          <select class="field-select" id="opt-type">
+            <option value="call">CALL</option>
+            <option value="put">PUT</option>
+            <option value="both">双向</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="subpanel">
+        <div class="subpanel-head">
+          <div class="subpanel-title">行情源优先级</div>
+        </div>
+        <div class="toggle-row" style="margin-top:0">
+          <div class="toggle-item">
+            <label class="toggle">
+              <input type="checkbox" id="webull-market-enabled"/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+            <span>优先使用 Webull 正股行情</span>
+          </div>
+        </div>
+        <div class="webull-status-line" id="webull-market-status">默认优先 Longbridge / Yahoo</div>
+      </div>
+
+      <button class="scan-btn" id="scan-btn" onclick="doScan()">开始扫描</button>
+      <div id="scan-error"></div>
+    </div>
+
+    <!-- 历史对话 -->
+    <div class="section" data-workspace="overview reports">
+      <div class="section-title">共享会话</div>
+      <div class="history-list" id="history-list">
+        <div class="history-item" onclick="setCmd(this)">扫描NVDA最近的日K线、今天的分时线，相关领域的新闻</div>
+        <div class="history-item" onclick="setCmd(this)">扫描分析一下SPY稍微远一点、便宜一点、稍微彩票一点的单腿</div>
+        <div class="history-item" onclick="setCmd(this)">扫描QQQ便宜一点彩票一点的单腿</div>
+        <div class="history-item" onclick="setCmd(this)">扫描TSLA最近日K和分时，找一个高胜率单腿</div>
+      </div>
+    </div>
+
+    <!-- Longbridge 授权 -->
+    <div class="section" data-workspace="overview reports settings">
+      <div class="section-title">LONGBRIDGE 鉴权</div>
+      <div class="auth-row">
+        <span style="font-size:11px;color:var(--text1)">共享会话</span>
+        <span class="auth-status auth-valid" id="auth-status">VALID</span>
+      </div>
+      <div class="auth-info" id="auth-info">market temp HK: 59 (Temp Comfortable &amp; Gradually Dropping)</div>
+      <div class="btn-row">
+        <button class="btn-sm" onclick="toast('状态检查中…')">检查状态</button>
+        <button class="btn-sm" onclick="toast('发起登录请求…')">发起登录</button>
+        <button class="btn-sm" onclick="toast('已登出')">登出</button>
+      </div>
+      <div class="account-box" style="margin-top:10px">
+        <div class="section-title" style="margin-bottom:6px">账户面板</div>
+        <div class="account-grid">
+          <div class="account-meta">
+            <div class="account-label">账号索引</div>
+            <div class="account-value">8b08aaa76cf7b111</div>
+          </div>
+          <div class="account-meta">
+            <div class="account-label">profile</div>
+            <div class="account-value">trading-a</div>
+          </div>
+          <div class="account-meta">
+            <div class="account-label">label</div>
+            <div class="account-value">美股主账号</div>
+          </div>
+        </div>
+        <div class="account-actions">
+        <div class="account-default">
+            <span>设为默认</span>
+            <label class="toggle">
+              <input type="checkbox" checked/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn-sm" onclick="toast('检查账户状态')">检查状态</button>
+            <button class="btn-sm" onclick="toast('加入账户')">加入账户</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Webull 实盘 -->
+    <div class="section nav-anchor" id="webull-risk-anchor" data-workspace="risk settings">
+      <div class="section-title">WEBULL 实盘</div>
+      <div class="auth-row">
+        <span style="font-size:11px;color:var(--text1)">自动交易</span>
+        <label class="toggle">
+          <input type="checkbox" id="webull-auto-enabled"/>
+          <div class="toggle-bg"></div>
+          <div class="toggle-knob"></div>
+        </label>
+      </div>
+      <div class="webull-status-line" id="webull-status-text">等待配置</div>
+      <div class="subpanel">
+        <div class="subpanel-head">
+          <div class="subpanel-title">连接设置</div>
+        </div>
+        <div class="row2">
+          <div>
+            <div class="field-label">API Key</div>
+            <input class="field-input" id="webull-app-key" placeholder="app key"/>
+          </div>
+          <div>
+            <div class="field-label">Secret</div>
+            <input class="field-input" id="webull-app-secret" type="password" placeholder="secret"/>
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <div class="field-label">Access Token</div>
+            <input class="field-input" id="webull-access-token" type="password" placeholder="optional"/>
+          </div>
+          <div>
+            <div class="field-label">Account ID / 账户号</div>
+            <input class="field-input" id="webull-account-id" placeholder="例如内部 ID 或账户号"/>
+          </div>
+        </div>
+        <div class="webull-status-line">完成 App 验证后，这里可填账户号或内部 `account_id`。系统连上后会自动识别并映射。</div>
+        <div class="row2">
+          <div>
+            <div class="field-label">Region</div>
+            <input class="field-input" id="webull-region" value="us"/>
+          </div>
+          <div>
+            <div class="field-label">API Endpoint</div>
+            <input class="field-input" id="webull-endpoint" value="api.webull.com"/>
+          </div>
+        </div>
+      </div>
+      <div class="subpanel">
+        <div class="subpanel-head">
+          <div class="subpanel-title">风控设置</div>
+        </div>
+        <div class="row2">
+          <div>
+            <div class="field-label">资金占用</div>
+            <input class="field-input" id="webull-cap-pct" type="number" min="0.01" max="1" step="0.01" value="0.25"/>
+          </div>
+          <div>
+            <div class="field-label">最多持仓</div>
+            <input class="field-input" id="webull-max-pos" type="number" min="1" max="10" value="2"/>
+          </div>
+        </div>
+        <div class="toggle-row" style="margin-top:8px">
+          <div class="toggle-item">
+            <label class="toggle">
+              <input type="checkbox" id="webull-auto-scan"/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+            <span>扫描后自动执行</span>
+          </div>
+          <button class="btn-sm" onclick="saveWebullSettings()">保存</button>
+          <button class="btn-sm" onclick="refreshWebullStatus()">测试</button>
+        </div>
+      </div>
+      <div class="subpanel">
+        <div class="subpanel-head">
+          <div class="subpanel-title">策略偏好</div>
+        </div>
+        <textarea class="cmd-textarea" id="webull-strategy-notes" placeholder="例如：只做 NVDA / QQQ，偏好 7-21 DTE，优先低价 call，要求流动性好、止损明确"></textarea>
+      </div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn-sm" onclick="saveWebullSettings()">保存配置</button>
+        <button class="btn-sm" onclick="refreshWebullStatus()">刷新状态</button>
+      </div>
+      <div class="account-box" id="webull-status-box" style="margin-top:8px">
+        <div class="section-title" style="margin-bottom:6px">账户概览</div>
+        <div class="account-grid">
+          <div class="account-meta"><div class="account-label">可用</div><div class="account-value" id="webull-available-cash">—</div></div>
+          <div class="account-meta"><div class="account-label">已用</div><div class="account-value" id="webull-used-capital">—</div></div>
+          <div class="account-meta"><div class="account-label">剩余</div><div class="account-value" id="webull-remaining-budget">—</div></div>
+          <div class="account-meta"><div class="account-label">持仓</div><div class="account-value" id="webull-open-count">—</div></div>
+          <div class="account-meta"><div class="account-label">预算上限</div><div class="account-value" id="webull-budget-limit">—</div></div>
+          <div class="account-meta"><div class="account-label">交易状态</div><div class="account-value" id="webull-trade-state">—</div></div>
+          <div class="account-meta"><div class="account-label">账户号</div><div class="account-value" id="webull-account-number">—</div></div>
+          <div class="account-meta"><div class="account-label">内部 ID</div><div class="account-value" id="webull-account-display">—</div></div>
+          <div class="account-meta"><div class="account-label">持仓上限</div><div class="account-value" id="webull-max-open-display">—</div></div>
+          <div class="account-meta"><div class="account-label">资金比例</div><div class="account-value" id="webull-cap-pct-display">—</div></div>
+        </div>
+        <div class="account-actions">
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn-sm" onclick="executeSelectedWebull()">预检后执行</button>
+            <button class="btn-sm" onclick="refreshWebullStatus()">更新数据</button>
+          </div>
+        </div>
+        <div class="auth-info" id="webull-status-detail" style="margin-top:8px">未连接</div>
+        <div class="risk-list" id="webull-blockers"><strong>当前限制</strong><div class="risk-item">未连接</div></div>
+        <div class="compare-panel">
+          <div class="compare-head">
+            <div class="compare-title">交易追踪</div>
+          </div>
+          <div class="compare-grid">
+            <div class="compare-card">
+              <div class="compare-card-title">最近模拟单</div>
+              <div class="compare-card-main" id="trade-compare-sim-main">暂无模拟记录</div>
+              <div class="compare-card-sub" id="trade-compare-sim-sub">等待模拟仓数据</div>
+            </div>
+            <div class="compare-card">
+              <div class="compare-card-title">最近 Webull 执行</div>
+              <div class="compare-card-main" id="trade-compare-live-main">暂无执行记录</div>
+              <div class="compare-card-sub" id="trade-compare-live-sub">等待 Webull 状态</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Provider 管理 -->
+    <div class="section nav-anchor" id="settings-anchor" data-workspace="settings">
+      <div class="section-title">AI PROVIDER 管理</div>
+      <div class="provider-list" id="provider-list">
+        <div class="provider-item active" data-provider="deepseek">
+          <div class="provider-enabled-row">
+            <label class="toggle">
+              <input type="checkbox" class="provider-enabled" checked/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+          </div>
+          <div class="provider-fields">
+            <input class="provider-input provider-name-input" value="deepseek" placeholder="name"/>
+            <input class="provider-input provider-model-input" value="deepseek-chat" placeholder="model"/>
+            <input class="provider-input provider-base-input" value="https://api.deepseek.com" placeholder="base url"/>
+            <input class="provider-input provider-key-input" type="password" value="" placeholder="api key"/>
+          </div>
+          <span class="provider-del" onclick="this.closest('.provider-item').remove()">删除</span>
+        </div>
+        <div class="provider-item" data-provider="qwen">
+          <div class="provider-enabled-row">
+            <label class="toggle">
+              <input type="checkbox" class="provider-enabled" checked/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+          </div>
+          <div class="provider-fields">
+            <input class="provider-input provider-name-input" value="qwen" placeholder="name"/>
+            <input class="provider-input provider-model-input" value="qwen-plus" placeholder="model"/>
+            <input class="provider-input provider-base-input" value="https://dashscope.aliyuncs.com/compatible-mode/v1" placeholder="base url"/>
+            <input class="provider-input provider-key-input" type="password" value="" placeholder="api key"/>
+          </div>
+          <span class="provider-del" onclick="this.closest('.provider-item').remove()">删除</span>
+        </div>
+        <div class="provider-item" data-provider="gemini">
+          <div class="provider-enabled-row">
+            <label class="toggle">
+              <input type="checkbox" class="provider-enabled" checked/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+          </div>
+          <div class="provider-fields">
+            <input class="provider-input provider-name-input" value="gemini" placeholder="name"/>
+            <input class="provider-input provider-model-input" value="gemini-2.5-flash" placeholder="model"/>
+            <input class="provider-input provider-base-input" value="https://generativelanguage.googleapis.com/v1beta/openai" placeholder="base url"/>
+            <input class="provider-input provider-key-input" type="password" value="" placeholder="api key"/>
+          </div>
+          <span class="provider-del" onclick="this.closest('.provider-item').remove()">删除</span>
+        </div>
+        <div class="provider-item" data-provider="ollama">
+          <div class="provider-enabled-row">
+            <label class="toggle">
+              <input type="checkbox" class="provider-enabled"/>
+              <div class="toggle-bg"></div>
+              <div class="toggle-knob"></div>
+            </label>
+          </div>
+          <div class="provider-fields">
+            <input class="provider-input provider-name-input" value="ollama" placeholder="name"/>
+            <input class="provider-input provider-model-input" value="qwen2.5:7b" placeholder="model"/>
+            <input class="provider-input provider-base-input" value="http://127.0.0.1:11434/v1" placeholder="base url"/>
+            <input class="provider-input provider-key-input" type="password" value="ollama" placeholder="api key"/>
+          </div>
+          <span class="provider-del" onclick="this.closest('.provider-item').remove()">删除</span>
+        </div>
+      </div>
+      <button class="provider-add" onclick="addProvider()">+ 添加 Provider</button>
+    </div>
+
+    <div class="section" data-workspace="settings">
+      <div class="section-title">数据源 / AI Key</div>
+      <div class="field-label">DeepSeek API Key</div>
+      <input class="field-input" id="deepseek-key" type="password" placeholder="sk-..." />
+      <div class="row2">
+        <div>
+          <div class="field-label">DeepSeek Model</div>
+          <input class="field-input" id="deepseek-model" value="deepseek-chat" />
+        </div>
+        <div>
+          <div class="field-label">DeepSeek Base URL</div>
+          <input class="field-input" id="deepseek-base" value="https://api.deepseek.com" />
+        </div>
+      </div>
+      <div class="row2" style="margin-top:8px">
+        <div>
+          <div class="field-label">TwelveData API Key</div>
+          <input class="field-input" id="twelvedata-key" placeholder="twelvedata key" />
+        </div>
+        <div>
+          <div class="field-label">Alpha Vantage API Key</div>
+          <input class="field-input" id="alpha-key" placeholder="alpha key" />
+        </div>
+      </div>
+    </div>
+
+    <div class="section" data-workspace="learning settings">
+      <div class="section-title">经验图谱</div>
+      <div class="field-label">选择一个本地文件夹，自动扫描全部图片并提炼你的风格</div>
+      <input type="file" id="library-folder-input" webkitdirectory multiple accept="image/*" style="display:none"/>
+      <input type="file" id="library-upload-input" accept="image/*" multiple style="display:none"/>
+      <div class="library-tools">
+        <button class="library-upload" onclick="$('library-folder-input').click()">选择文件夹</button>
+        <button class="library-upload" onclick="scanSelectedFolder()">开始自动扫描</button>
+        <button class="library-upload" onclick="$('library-upload-input').click()">上传图片</button>
+        <button class="library-refresh" onclick="refreshLibrary()">刷新</button>
+      </div>
+      <div class="library-progress" id="library-progress">未开始</div>
+      <div class="library-summary" id="library-summary"></div>
+      <div class="field-label" style="margin-top:8px">标签</div>
+      <select class="field-select" id="library-tag">
+        <option value="bullish">bullish</option>
+        <option value="bearish">bearish</option>
+        <option value="breakout">breakout</option>
+        <option value="breakdown">breakdown</option>
+        <option value="high_iv">high_iv</option>
+        <option value="low_iv">low_iv</option>
+        <option value="7dte">7dte</option>
+        <option value="30dte">30dte</option>
+        <option value="success">success</option>
+        <option value="fail">fail</option>
+      </select>
+      <input class="field-input" id="library-note" placeholder="备注，例如：突破后回踩、IV偏高、适合买方" style="margin-top:6px"/>
+      <div class="library-list" id="library-list"></div>
+    </div>
+
+  </aside>
+
+  <!-- ── 右侧 ── -->
+  <main class="right-panel">
+
+    <!-- 状态卡 -->
+    <div class="stat-cards nav-anchor" id="summary-anchor" data-workspace="overview reports signals">
+      <div class="stat-card">
+        <div class="stat-card-label">技术偏向</div>
+        <div class="stat-card-value" id="stat-bias" style="font-size:14px">—</div>
+        <div class="stat-card-sub" id="stat-bias-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">现价参考</div>
+        <div class="stat-card-value neutral" id="stat-price">—</div>
+        <div class="stat-card-sub" id="stat-rsi">RSI —</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">日内 VWAP</div>
+        <div class="stat-card-value" id="stat-vwap">—</div>
+        <div class="stat-card-sub" id="stat-vwap-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">IV Rank / ATM IV</div>
+        <div class="stat-card-value" id="stat-ivr">—</div>
+        <div class="stat-card-sub" id="stat-atm-iv">ATM IV —</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">任务状态</div>
+        <div class="stat-card-value" id="stat-task">succeeded</div>
+        <div class="stat-card-sub">完成 100%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">策略标签</div>
+        <div class="stat-card-value" id="stat-tag">纯看涨单</div>
+        <div class="stat-card-sub" id="stat-tag-sub">等待扫描</div>
+      </div>
+    </div>
+
+    <div class="overview-strip" data-workspace="overview reports signals">
+      <div class="overview-pills">
+        <div class="overview-pill"><span class="overview-pill-label">symbol</span><span class="overview-pill-value" id="overview-symbol">SPY</span></div>
+        <div class="overview-pill"><span class="overview-pill-label">source</span><span class="overview-pill-value" id="overview-source">--</span></div>
+        <div class="overview-pill"><span class="overview-pill-label">ai</span><span class="overview-pill-value" id="overview-ai">single</span></div>
+        <div class="overview-pill"><span class="overview-pill-label">plan</span><span class="overview-pill-value" id="overview-plan">等待扫描</span></div>
+        <div class="overview-pill"><span class="overview-pill-label">update</span><span class="overview-pill-value" id="overview-update">--</span></div>
+      </div>
+      <div class="overview-actions">
+        <button class="overview-btn" onclick="scrollToSection('strategy-body')">看总览</button>
+        <button class="overview-btn" onclick="scrollToSection('trade-grid')">看计划</button>
+        <button class="overview-btn" onclick="scrollToSection('pool-grid')">看候选池</button>
+        <button class="overview-btn" onclick="doScan()">重新扫描</button>
+      </div>
+    </div>
+
+    <!-- 最佳方案 -->
+    <div class="strategy-section nav-anchor" id="strategy-anchor" data-workspace="overview reports">
+      <div class="strategy-header">
+        <div>
+          <div class="strategy-title">最终方案</div>
+          <div class="section-caption">先看这里，确认方向、结构、执行风格和核心约束。</div>
+        </div>
+        <button class="rescan-btn" onclick="doScan()">重新扫描</button>
+      </div>
+      <div id="strategy-body">
+        <div style="font-size:11px;color:var(--text3);font-family:var(--mono)">等待扫描…输入 Ticker 后点击「开始扫描」</div>
+      </div>
+    </div>
+
+    <div class="trade-section nav-anchor" id="trade-anchor" data-workspace="overview signals reports">
+      <div class="trade-header">
+        <div>
+          <div class="trade-title">入场 / 止损 / 止盈</div>
+          <div class="section-caption">这里是可执行层，优先看入场位、失效位和 RR。</div>
+          <div class="trade-sub" id="trade-sub">等待扫描</div>
+        </div>
+        <div class="trade-sub" id="trade-source">source --</div>
+      </div>
+      <div class="trade-grid" id="trade-grid">
+        <div class="empty-state" style="grid-column:1/-1;padding:20px 10px">
+          <div class="e-icon">▢</div>
+          <div>扫描后这里会显示不同期权的进场、止损、止盈方案</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sim-section nav-anchor" id="sim-anchor" data-workspace="positions history learning">
+      <div class="sim-header">
+        <div>
+          <div class="sim-title">模拟交易仓</div>
+          <div class="section-caption">推荐单、候选池和异常期权都能直接进模拟仓，自动记录表现。</div>
+          <div class="sim-sub" id="sim-sub">未开仓</div>
+        </div>
+        <div class="sim-toolbar">
+          <button class="sim-btn" onclick="refreshSimPortfolio()">刷新持仓</button>
+        </div>
+      </div>
+      <div class="sim-summary" id="sim-summary">
+        <div class="sim-card"><div class="sim-card-label">持仓</div><div class="sim-card-value" id="sim-open-count">0</div></div>
+        <div class="sim-card"><div class="sim-card-label">浮动盈亏</div><div class="sim-card-value" id="sim-open-pnl">0.00</div></div>
+        <div class="sim-card"><div class="sim-card-label">已实现</div><div class="sim-card-value" id="sim-realized-pnl">0.00</div></div>
+        <div class="sim-card"><div class="sim-card-label">胜率</div><div class="sim-card-value" id="sim-win-rate">0.00%</div></div>
+        <div class="sim-card"><div class="sim-card-label">总收益</div><div class="sim-card-value" id="sim-total-pnl">0.00</div></div>
+      </div>
+      <div class="sim-table-wrap">
+        <table class="sim-table">
+          <thead>
+            <tr>
+              <th>标的</th>
+              <th>合约</th>
+              <th>开仓</th>
+              <th>现价</th>
+              <th>P/L</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="sim-body">
+            <tr><td colspan="7" style="color:var(--text3);padding:10px">暂无模拟持仓</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sim-history" id="sim-history">系统会自动保存每次开仓和平仓，以及持仓期间的价格轨迹。</div>
+      <div class="learning-panel nav-anchor" id="learning-anchor" data-workspace="learning">
+        <div class="learning-panel-head">
+          <div class="learning-panel-title">自主学习引擎</div>
+          <div class="learning-panel-sub" id="learning-confidence">置信度 --</div>
+        </div>
+        <div class="learning-grid">
+          <div class="learning-item"><div class="learning-item-label">方向偏好</div><div class="learning-item-value" id="learning-direction">—</div></div>
+          <div class="learning-item"><div class="learning-item-label">DTE 偏好</div><div class="learning-item-value" id="learning-dte">—</div></div>
+          <div class="learning-item"><div class="learning-item-label">IV 偏好</div><div class="learning-item-value" id="learning-iv">—</div></div>
+          <div class="learning-item"><div class="learning-item-label">RR 偏好</div><div class="learning-item-value" id="learning-rr">—</div></div>
+        </div>
+        <div class="learning-summary" id="learning-summary">系统会基于你的模拟仓结果和经验图谱，自动微调筛选和评分。</div>
+      </div>
+    </div>
+
+    <div class="band-head" data-workspace="overview reports signals">
+      <div>
+        <div class="band-title">价格结构</div>
+        <div class="band-sub">左边看近日日K节奏，右边看当日分时和 VWAP 相对位置。</div>
+      </div>
+    </div>
+
+    <!-- 图表 -->
+    <div class="charts-row" data-workspace="overview reports signals">
+      <div class="chart-panel">
+        <div class="chart-header">
+          <span class="chart-title">最近日 K 收盘路径</span>
+          <span id="chart-k-label" style="color:var(--text3)">—</span>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-k"></canvas>
+        </div>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-header">
+          <span class="chart-title">今日分时 / VWAP</span>
+          <span id="chart-intra-label" style="color:var(--text3)">—</span>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-intra"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="band-head" data-workspace="opportunities signals">
+      <div>
+        <div class="band-title">筛选榜单与候选池</div>
+        <div class="band-sub">先看 Top50 和异常期权，再下钻到单标的扫描和候选池。</div>
+      </div>
+    </div>
+
+    <!-- 期权候选池 -->
+    <div class="pool-section nav-anchor" id="pool-anchor" data-workspace="opportunities signals">
+      <div class="top50-section">
+        <div class="top50-head">
+          <div>
+            <div class="top50-title">市值前1000 Top50</div>
+            <div class="top50-sub" id="universe-meta">等待筛选</div>
+          </div>
+          <div class="top50-actions">
+            <button class="top50-btn" onclick="runTop50(false)">运行筛选</button>
+            <button class="top50-btn" onclick="runTop50(true)">刷新榜单</button>
+          </div>
+        </div>
+        <div class="top50-wrap">
+          <table class="top50-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Symbol</th>
+                <th>市值</th>
+                <th>现价</th>
+                <th>Option</th>
+                <th>计划</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody id="top50-body">
+              <tr><td colspan="7" style="color:var(--text3);padding:10px">点击“运行筛选”开始</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="top50-focus" id="top50-focus">
+          <div class="top50-focus-head">
+            <div class="top50-focus-title">选中标的详情</div>
+            <div class="top50-actions">
+              <button class="top50-btn" onclick="openSelectedTop50Scan()" id="top50-open-btn" disabled>打开扫描</button>
+              <button class="top50-btn" onclick="buySimFromTop50()" id="top50-buy-btn" disabled>模拟买入</button>
+              <button class="top50-btn" onclick="executeTop50FocusLive()" id="top50-live-btn" disabled>预检实盘</button>
+            </div>
+          </div>
+          <div class="top50-focus-main" id="top50-focus-main">点击上方任意股票代码查看中文分析</div>
+          <div class="top50-focus-sub" id="top50-focus-sub">这里会显示为什么上榜、入场/止损/止盈和板块背景。</div>
+        </div>
+      </div>
+
+      <div class="top50-section unusual-section">
+        <div class="top50-head">
+          <div>
+            <div class="top50-title">每日异常期权</div>
+            <div class="top50-sub" id="unusual-meta">等待扫描</div>
+          </div>
+          <div class="top50-actions">
+            <button class="top50-btn" onclick="runUnusual(false)">运行扫描</button>
+            <button class="top50-btn" onclick="runUnusual(true)">刷新异常</button>
+          </div>
+        </div>
+        <div class="top50-wrap unusual-wrap">
+          <table class="top50-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Symbol</th>
+                <th>异常</th>
+                <th>Option</th>
+                <th>计划</th>
+                <th>理由</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody id="unusual-body">
+              <tr><td colspan="7" style="color:var(--text3);padding:10px">点击“运行扫描”开始</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="top50-focus" id="unusual-focus">
+          <div class="top50-focus-head">
+            <div class="top50-focus-title">异常期权详情</div>
+            <div class="top50-actions">
+              <button class="top50-btn" onclick="openSelectedUnusualScan()" id="unusual-open-btn" disabled>打开扫描</button>
+              <button class="top50-btn" onclick="buySimFromUnusual()" id="unusual-buy-btn" disabled>模拟买入</button>
+              <button class="top50-btn" onclick="executeSelectedUnusual()" id="unusual-live-btn" disabled>预检实盘</button>
+            </div>
+          </div>
+          <div class="top50-focus-main" id="unusual-focus-main">点击上方任意股票代码或合约查看异常资金逻辑</div>
+          <div class="top50-focus-sub" id="unusual-focus-sub">这里会显示成交异常、权利金、IV、入场/止损/止盈和正股触发位。</div>
+        </div>
+      </div>
+
+      <div class="pool-header">
+        <div class="pool-title">期权候选池</div>
+        <div class="pool-count" id="pool-count">0 合约</div>
+      </div>
+      <div class="pool-grid" id="pool-grid">
+        <div class="empty-state">
+          <div class="e-icon">⬡</div>
+          <div>开始扫描后，期权候选合约将显示于此</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+</div>
+
+<div class="modal-mask" id="webull-precheck-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">Webull 预检确认</div>
+      <button class="modal-close" onclick="closeWebullPrecheck()">关闭</button>
+    </div>
+    <div class="modal-grid" id="webull-precheck-grid">
+      <div class="modal-meta"><div class="modal-meta-label">状态</div><div class="modal-meta-value">等待预检</div></div>
+    </div>
+    <div class="modal-block">
+      <div class="modal-block-title">风控检查</div>
+      <div id="webull-precheck-blockers" class="modal-meta-value">等待预检</div>
+    </div>
+    <div class="modal-block">
+      <div class="modal-block-title">订单预览</div>
+      <pre class="modal-json" id="webull-precheck-preview">等待预检</pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-sm" onclick="closeWebullPrecheck()">取消</button>
+      <button class="btn-sm" id="webull-precheck-confirm" onclick="confirmWebullPrecheck()" disabled>确认提交</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 状态 ────────────────────────────────────────────────────
+const API = (window.location.origin && /^https?:/i.test(window.location.origin))
+  ? window.location.origin
+  : 'http://127.0.0.1:5000';
+let currentSymbol = 'SPY';
+let kChart = null, intraChart = null;
+let scanHistory = [];
+let pendingWebullPayload = null;
+let latestWebullState = null;
+let latestSimPortfolio = null;
+let sectionToggleState = {};
+let selectedTop50Row = null;
+let selectedUnusualRow = null;
+let selectedRecommendationSource = null;
+
+// ── 工具 ────────────────────────────────────────────────────
+function $(id){ return document.getElementById(id) }
+function toast(msg, dur=2800){
+  const el = document.createElement('div');
+  el.className='toast'; el.textContent=msg;
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), dur+400);
+}
+function scrollToSection(id){
+  const el = $(id);
+  if(!el) return;
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+  document.querySelectorAll('.workspace-spotlight').forEach(node => node.classList.remove('workspace-spotlight'));
+  el.classList.add('workspace-spotlight');
+  setTimeout(() => el.classList.remove('workspace-spotlight'), 1400);
+}
+function applyWorkspaceMode(mode){
+  document.body.dataset.workspaceMode = String(mode || 'overview').trim().toLowerCase();
+}
+function activateWorkspaceTab(targetId){
+  document.querySelectorAll('.workspace-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.target === targetId);
+  });
+}
+function initWorkspaceTabs(){
+  const tabs = Array.from(document.querySelectorAll('.workspace-tab'));
+  if(!tabs.length) return;
+  tabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.target;
+      applyWorkspaceMode(btn.dataset.workspace || 'overview');
+      activateWorkspaceTab(targetId);
+      scrollToSection(targetId);
+    });
+  });
+  const active = tabs.find(btn => btn.classList.contains('active')) || tabs[0];
+  applyWorkspaceMode(active?.dataset.workspace || 'overview');
+}
+function setCmd(el){ $('cmd-input').value = el.textContent.trim() }
+function fmt(v, d=2){ return v==null?'—':(+v).toFixed(d) }
+function fmtPct(v){ return v==null?'—':`${(+v).toFixed(2)}%` }
+function escHtml(s){
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+function providerRowTemplate(provider = {}){
+  const name = provider.name || '';
+  const model = provider.model || '';
+  const baseUrl = provider.base_url || '';
+  const apiKey = provider.api_key || '';
+  const enabled = provider.enabled !== false ? 'checked' : '';
+  return `
+    <div class="provider-item ${provider.active ? 'active' : ''}">
+      <div class="provider-enabled-row">
+        <label class="toggle">
+          <input type="checkbox" class="provider-enabled" ${enabled}/>
+          <div class="toggle-bg"></div>
+          <div class="toggle-knob"></div>
+        </label>
+      </div>
+      <div class="provider-fields">
+        <input class="provider-input provider-name-input" value="${escHtml(name)}" placeholder="name"/>
+        <input class="provider-input provider-model-input" value="${escHtml(model)}" placeholder="model"/>
+        <input class="provider-input provider-base-input" value="${escHtml(baseUrl)}" placeholder="base url"/>
+        <input class="provider-input provider-key-input" type="password" value="${escHtml(apiKey)}" placeholder="api key"/>
+      </div>
+      <span class="provider-del" onclick="this.closest('.provider-item').remove(); persistProviders(); syncAiProviderSelect()">删除</span>
+    </div>
+  `;
+}
+
+function getProvidersFromUI(){
+  return Array.from(document.querySelectorAll('#provider-list .provider-item')).map(item => ({
+    name: item.querySelector('.provider-name-input')?.value.trim() || '',
+    model: item.querySelector('.provider-model-input')?.value.trim() || '',
+    base_url: item.querySelector('.provider-base-input')?.value.trim() || '',
+    api_key: item.querySelector('.provider-key-input')?.value || '',
+    enabled: !!item.querySelector('.provider-enabled')?.checked,
+    active: item.classList.contains('active'),
+  })).filter(p => p.name && p.model && p.base_url);
+}
+
+function syncAiProviderSelect(){
+  const select = $('ai-provider');
+  if(!select) return;
+  const current = select.value;
+  const providers = getProvidersFromUI();
+  const options = providers.length ? providers : [
+    { name: 'deepseek' },
+    { name: 'qwen' },
+    { name: 'gemini' },
+    { name: 'ollama' },
+  ];
+  select.innerHTML = options.map(p => `<option value="${escHtml(p.name)}">${escHtml(p.name)}</option>`).join('');
+  if(options.some(p => p.name === current)){
+    select.value = current;
+  }
+}
+
+function initSectionToggles(){
+  const defaults = {
+    '扫描指令': true,
+    '共享会话': false,
+    'LONGBRIDGE 鉴权': true,
+    'WEBULL 实盘': false,
+    'AI PROVIDER 管理': false,
+    '数据源 / AI Key': false,
+    '经验图谱': true,
+  };
+  try{
+    sectionToggleState = JSON.parse(localStorage.getItem('left-section-state') || '{}') || {};
+  }catch(e){
+    sectionToggleState = {};
+  }
+
+  document.querySelectorAll('.left-panel .section').forEach(section => {
+    if(section.dataset.bound === '1') return;
+    const titleEl = section.querySelector('.section-title');
+    const title = titleEl?.textContent.trim() || '';
+    if(!title) return;
+
+    const bodyNodes = Array.from(section.childNodes).filter(node => node !== titleEl);
+    const body = document.createElement('div');
+    body.className = 'section-body';
+    bodyNodes.forEach(node => body.appendChild(node));
+
+    const head = document.createElement('div');
+    head.className = 'section-head';
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'section-title';
+    titleWrap.textContent = title;
+    const btn = document.createElement('button');
+    btn.className = 'section-toggle';
+    btn.type = 'button';
+    head.appendChild(titleWrap);
+    head.appendChild(btn);
+
+    section.innerHTML = '';
+    section.appendChild(head);
+    section.appendChild(body);
+    section.dataset.bound = '1';
+
+    const isOpen = sectionToggleState[title] ?? defaults[title] ?? true;
+    const applyState = (open) => {
+      section.classList.toggle('collapsed', !open);
+      btn.textContent = open ? '关闭' : '启动';
+      btn.dataset.state = open ? 'open' : 'closed';
+      sectionToggleState[title] = open;
+      localStorage.setItem('left-section-state', JSON.stringify(sectionToggleState));
+    };
+    btn.addEventListener('click', () => applyState(btn.dataset.state !== 'open'));
+    applyState(isOpen);
+  });
+}
+
+function persistProviders(){
+  localStorage.setItem('ai-providers', JSON.stringify(getProvidersFromUI()));
+}
+
+function applyProviderPersistence(){
+  const list = $('provider-list');
+  if(!list) return;
+  list.addEventListener('input', () => persistProviders());
+  list.addEventListener('change', () => { persistProviders(); syncAiProviderSelect(); });
+}
+
+function addProvider(){
+  const li = document.createElement('div');
+  li.innerHTML = providerRowTemplate({enabled:true});
+  const node = li.firstElementChild;
+  $('provider-list').appendChild(node);
+  persistProviders();
+  syncAiProviderSelect();
+}
+
+function loadSettings(){
+  const fields = [
+    'deepseek-key','deepseek-model','deepseek-base','twelvedata-key','alpha-key',
+    'ai-mode','ai-provider','toggle-ai','toggle-council',
+    'webull-market-enabled',
+    'webull-auto-enabled','webull-auto-scan','webull-app-key','webull-app-secret',
+    'webull-access-token','webull-account-id','webull-region','webull-endpoint',
+    'webull-cap-pct','webull-max-pos','webull-strategy-notes'
+  ];
+  fields.forEach(id=>{
+    const el = $(id);
+    const saved = localStorage.getItem(id);
+    if(!el) return;
+    if(saved !== null){
+      if(el.type === 'checkbox') el.checked = saved === 'true';
+      else el.value = saved;
+    }
+    el.addEventListener('input', ()=> localStorage.setItem(id, el.type === 'checkbox' ? String(el.checked) : el.value));
+    el.addEventListener('change', ()=> localStorage.setItem(id, el.type === 'checkbox' ? String(el.checked) : el.value));
+  });
+
+  const autoToggle = $('webull-auto-enabled');
+  const autoScanToggle = $('webull-auto-scan');
+  if(autoToggle && autoScanToggle){
+    autoToggle.addEventListener('change', ()=>{
+      if(autoToggle.checked) autoScanToggle.checked = true;
+      localStorage.setItem('webull-auto-enabled', String(autoToggle.checked));
+      localStorage.setItem('webull-auto-scan', String(autoScanToggle.checked));
+    });
+    autoScanToggle.addEventListener('change', ()=>{
+      if(!autoScanToggle.checked) autoToggle.checked = false;
+      localStorage.setItem('webull-auto-enabled', String(autoToggle.checked));
+      localStorage.setItem('webull-auto-scan', String(autoScanToggle.checked));
+    });
+    if(autoToggle.checked) autoScanToggle.checked = true;
+  }
+
+  const providerSaved = localStorage.getItem('ai-providers');
+  if(providerSaved){
+    try{
+      const providers = JSON.parse(providerSaved);
+      if(Array.isArray(providers) && providers.length){
+        const list = $('provider-list');
+        list.innerHTML = providers.map((p, idx) => providerRowTemplate({ ...p, active: idx === 0 })).join('');
+      }
+    }catch(e){}
+  }
+
+  applyProviderPersistence();
+  syncAiProviderSelect();
+  persistProviders();
+
+  const aiMode = $('ai-mode');
+  const councilToggle = $('toggle-council');
+  if(aiMode && councilToggle){
+    const syncFromMode = () => { councilToggle.checked = aiMode.value === 'council'; localStorage.setItem('toggle-council', String(councilToggle.checked)); };
+    const syncFromToggle = () => { aiMode.value = councilToggle.checked ? 'council' : 'single'; localStorage.setItem('ai-mode', aiMode.value); };
+    aiMode.addEventListener('change', syncFromMode);
+    councilToggle.addEventListener('change', syncFromToggle);
+    syncFromMode();
+  }
+}
+
+function refreshTopbarClock(){
+  const now = new Date();
+  const datePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  const timePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(now);
+  $('topbar-clock').textContent = `${datePart} GMT-4 ${timePart}`;
+  $('topbar-day').textContent = '今日是 NYSE 交易日';
+}
+
+function getSettings(){
+  const aiMode = $('toggle-council')?.checked ? 'council' : ($('ai-mode')?.value || 'single');
+  return {
+    ai_mode: aiMode,
+    ai_provider: $('ai-provider')?.value || 'deepseek',
+    enable_ai: $('toggle-ai')?.checked ?? true,
+    enable_webull_market_data: $('webull-market-enabled')?.checked ?? false,
+    deepseek_api_key: $('deepseek-key')?.value.trim() || '',
+    deepseek_model: $('deepseek-model')?.value.trim() || 'deepseek-chat',
+    deepseek_base_url: $('deepseek-base')?.value.trim() || 'https://api.deepseek.com',
+    twelvedata_api_key: $('twelvedata-key')?.value.trim() || '',
+    alpha_vantage_api_key: $('alpha-key')?.value.trim() || '',
+    ai_providers: getProvidersFromUI(),
+    webull_settings: getWebullSettings(),
+  };
+}
+
+async function readJsonSafe(res){
+  const raw = await res.text();
+  try{
+    return JSON.parse(raw);
+  }catch(_err){
+    const snippet = (raw || '').replace(/\s+/g,' ').trim().slice(0, 220);
+    throw new Error(`接口返回了非JSON内容 (${res.status})${snippet ? `: ${snippet}` : ''}`);
+  }
+}
+
+function getWebullSettings(){
+  return {
+    enabled: !!$('webull-auto-enabled')?.checked,
+    auto_execute_on_scan: !!$('webull-auto-scan')?.checked,
+    app_key: $('webull-app-key')?.value.trim() || '',
+    app_secret: $('webull-app-secret')?.value.trim() || '',
+    access_token: $('webull-access-token')?.value.trim() || '',
+    account_id: $('webull-account-id')?.value.trim() || '',
+    region_id: $('webull-region')?.value.trim() || 'us',
+    api_endpoint: $('webull-endpoint')?.value.trim() || 'api.webull.com',
+    max_capital_pct: parseFloat($('webull-cap-pct')?.value || '0.25') || 0.25,
+    max_open_positions: parseInt($('webull-max-pos')?.value || '2', 10) || 2,
+    strategy_notes: $('webull-strategy-notes')?.value.trim() || '',
+  };
+}
+
+function applyWebullConfigToUI(cfg = {}){
+  const pairs = {
+    'webull-auto-enabled': !!cfg.enabled,
+    'webull-auto-scan': !!cfg.auto_execute_on_scan,
+    'webull-app-key': cfg.app_key || '',
+    'webull-account-id': cfg.account_id || '',
+    'webull-region': cfg.region_id || 'us',
+    'webull-endpoint': cfg.api_endpoint || 'api.webull.com',
+    'webull-cap-pct': cfg.max_capital_pct ?? 0.25,
+    'webull-max-pos': cfg.max_open_positions ?? 2,
+    'webull-strategy-notes': cfg.strategy_notes || '',
+  };
+  Object.entries(pairs).forEach(([id, value])=>{
+    const el = $(id);
+    if(!el) return;
+    if(el.type === 'checkbox') el.checked = !!value;
+    else el.value = value;
+  });
+}
+
+function renderWebullStatus(data){
+  latestWebullState = data || null;
+  const cfg = data.config || {};
+  const balance = data.balance || {};
+  const connected = !!data.connected;
+  const blocked = !!data.order_blocked;
+  const accountNumber = data.account_number || '—';
+  const accountId = data.account_id || '—';
+  const maxOpen = data.max_open_positions ?? cfg.max_open_positions ?? '—';
+  const capPct = data.max_capital_pct != null ? `${Math.round((+data.max_capital_pct || 0) * 100)}%` : '—';
+  const reasons = Array.isArray(data.block_reasons) ? data.block_reasons.filter(Boolean) : [];
+  window.__webullConnected = !!data.connected;
+  $('webull-status-text').textContent = connected
+    ? `已连接 · ${cfg.enabled ? '自动交易开启' : '自动交易关闭'} · ${data.last_error ? data.last_error : '状态正常'}`
+    : `未连接 · ${data.last_error || '请先填写 Webull 配置'}`;
+  $('webull-status-detail').innerHTML = connected
+    ? `${blocked ? '<span class="status-badge warn">受限</span>' : '<span class="status-badge ok">可交易</span>'} 账户号 ${escHtml(accountNumber)} | 内部 ID ${escHtml(accountId)} | 预算 ${fmt(data.budget_limit, 2)} | 已用 ${fmt(data.used_capital, 2)} | 剩余 ${fmt(data.remaining_budget, 2)}`
+    : `Webull ${data.last_error || '未连接'}${data.hint ? ` · ${data.hint}` : ''}`;
+  $('webull-available-cash').textContent = fmt(balance.available_cash, 2);
+  $('webull-used-capital').textContent = fmt(data.used_capital, 2);
+  $('webull-remaining-budget').textContent = fmt(data.remaining_budget, 2);
+  $('webull-open-count').textContent = `${data.open_option_positions ?? 0}`;
+  $('webull-budget-limit').textContent = fmt(data.budget_limit, 2);
+  $('webull-trade-state').textContent = connected ? (blocked ? '受限' : '可交易') : '未连接';
+  $('webull-account-number').textContent = accountNumber;
+  $('webull-account-display').textContent = accountId;
+  $('webull-max-open-display').textContent = `${maxOpen}`;
+  $('webull-cap-pct-display').textContent = capPct;
+  const blockers = $('webull-blockers');
+  if(blockers){
+    if(!connected){
+      blockers.innerHTML = `<strong>当前限制</strong><div class="risk-item">${escHtml(data.last_error || '未连接')}</div>`;
+    }else if(reasons.length){
+      blockers.innerHTML = `<strong>当前限制</strong>${reasons.map(item=>`<div class="risk-item">${escHtml(item)}</div>`).join('')}`;
+    }else{
+      blockers.innerHTML = `<strong>当前限制</strong><div class="risk-item">当前风控通过，可以执行手动或自动下单。</div>`;
+    }
+  }
+  const accountInput = $('webull-account-id');
+  if(accountInput && connected && data.account_id && (!accountInput.value.trim() || accountInput.value.trim() === data.account_number)){
+    accountInput.value = data.account_id;
+    localStorage.setItem('webull-account-id', data.account_id);
+  }
+  if(connected){
+    refreshWebullMarketStatus(currentSymbol || 'AAPL');
+  }else{
+    renderWebullMarketStatus({ message: data.last_error || 'Webull 未连接' });
+  }
+  updateTradeCompare();
+}
+
+async function refreshWebullStatus(){
+  try{
+    const res = await fetch(`${API}/api/webull/status`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderWebullStatus(data);
+    return data;
+  }catch(e){
+    $('webull-status-text').textContent = `Webull 未就绪：${e.message}`;
+    $('webull-status-detail').textContent = e.message;
+    $('webull-available-cash').textContent = '—';
+    $('webull-used-capital').textContent = '—';
+    $('webull-remaining-budget').textContent = '—';
+    $('webull-open-count').textContent = '—';
+    $('webull-budget-limit').textContent = '—';
+    $('webull-trade-state').textContent = '未连接';
+    $('webull-account-number').textContent = '—';
+    $('webull-account-display').textContent = '—';
+    $('webull-max-open-display').textContent = '—';
+    $('webull-cap-pct-display').textContent = '—';
+    $('webull-blockers').innerHTML = `<strong>当前限制</strong><div class="risk-item">${escHtml(e.message)}</div>`;
+    latestWebullState = null;
+    updateTradeCompare();
+    return null;
+  }
+}
+
+async function saveWebullSettings(){
+  const settings = getWebullSettings();
+  localStorage.setItem('webull-settings', JSON.stringify(settings));
+  try{
+    const res = await fetch(`${API}/api/webull/settings`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(settings)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderWebullStatus(data.state?.last_status || await refreshWebullStatus() || { connected:false, last_error:'已保存' });
+    toast('Webull 配置已保存');
+  }catch(e){
+    toast(`Webull 保存失败: ${e.message}`);
+  }
+}
+
+async function loadWebullSettingsFromServer(){
+  try{
+    const res = await fetch(`${API}/api/webull/settings`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    applyWebullConfigToUI(data.config || {});
+    if(data.state?.last_status){
+      renderWebullStatus(data.state.last_status);
+    }
+  }catch(e){
+    console.warn('webull settings load failed', e);
+  }
+}
+
+async function refreshWebullMarketStatus(symbol = 'AAPL'){
+  try{
+    if(!$('webull-market-enabled')?.checked){
+      renderWebullMarketStatus({});
+      return null;
+    }
+    const res = await fetch(`${API}/api/webull/market_status?symbol=${encodeURIComponent(symbol)}`);
+    const data = await res.json();
+    renderWebullMarketStatus(data);
+    return data;
+  }catch(e){
+    renderWebullMarketStatus({ message: e.message || 'probe failed' });
+    return null;
+  }
+}
+
+function buildLivePayload(plan, origin = {}){
+  const p = plan || {};
+  return {
+    symbol: p.symbol || origin.symbol || currentSymbol,
+    name: origin.name || p.name || '',
+    contract: p.contract || origin.contract || '',
+    option_type: p.type || p.option_type || 'CALL',
+    expiry: p.expiry || origin.expiry || '',
+    strike: p.strike || origin.strike || null,
+    dte: p.dte || origin.dte || null,
+    iv_pct: p.iv_pct || origin.iv_pct || null,
+    risk_reward: p.risk_reward || origin.risk_reward || null,
+    qty: p.qty || origin.qty || 1,
+    source: origin.source || p.source || 'scan',
+    notes: origin.notes || p.reason || '',
+    entry_price: p.entry != null ? p.entry : (p.ask != null ? p.ask : p.last),
+    trade_plan: p,
+    origin,
+  };
+}
+
+function encodeLivePayload(payload){
+  return encodeURIComponent(JSON.stringify(payload || {}));
+}
+
+function updateTradeCompare(){
+  const sim = latestSimPortfolio || {};
+  const openTrades = Array.isArray(sim.open_trades) ? sim.open_trades : [];
+  const closedTrades = Array.isArray(sim.closed_trades) ? sim.closed_trades : [];
+  const latestSim = openTrades[0] || (closedTrades.length ? closedTrades[closedTrades.length - 1] : null);
+  if(latestSim){
+    const simPnl = latestSim.status === 'closed'
+      ? `${fmt(latestSim.realized_pnl, 2)} / ${fmt(latestSim.realized_pnl_pct, 2)}%`
+      : `${fmt(latestSim.unrealized_pnl, 2)} / ${fmt(latestSim.unrealized_pnl_pct, 2)}%`;
+    $('trade-compare-sim-main').textContent = `${latestSim.symbol || '—'} · ${latestSim.contract || '—'}`;
+    $('trade-compare-sim-sub').textContent = `${latestSim.status || 'open'} | 入场 ${fmt(latestSim.entry_price, 2)} | ${simPnl}\n${latestSim.updated_at || latestSim.closed_at || latestSim.opened_at || ''}`;
+  }else{
+    $('trade-compare-sim-main').textContent = '暂无模拟记录';
+    $('trade-compare-sim-sub').textContent = '等待模拟仓数据';
+  }
+
+  const executions = Array.isArray(latestWebullState?.recent_executions) ? latestWebullState.recent_executions : [];
+  const latestLive = executions[0] || null;
+  if(latestLive){
+    $('trade-compare-live-main').textContent = `${latestLive.symbol || '—'} · ${latestLive.contract || '—'}`;
+    $('trade-compare-live-sub').textContent = `${latestLive.status || 'submitted'} | Qty ${latestLive.qty || 1} | 限价 ${fmt(latestLive.limit_price, 2)}\n${latestLive.error ? `错误: ${latestLive.error}` : (latestLive.ts || '')}`;
+  }else{
+    $('trade-compare-live-main').textContent = '暂无执行记录';
+    $('trade-compare-live-sub').textContent = '等待 Webull 状态';
+  }
+}
+
+function renderWebullMarketStatus(data = {}){
+  const el = $('webull-market-status');
+  if(!el) return;
+  if(!($('webull-market-enabled')?.checked)){
+    el.textContent = '默认优先 Longbridge / Yahoo';
+    return;
+  }
+  if(data.available){
+    el.textContent = `Webull 行情可用 · ${data.symbol || 'AAPL'} · 已开通 stock quotes`;
+    return;
+  }
+  if(data.permission === 'unauthorized'){
+    el.textContent = 'Webull 行情未开通：当前 OpenAPI 账号未订阅 stock quotes，扫描将自动回退 Longbridge / Yahoo';
+    return;
+  }
+  if(data.message){
+    el.textContent = `Webull 行情状态：${data.message}`;
+    return;
+  }
+  el.textContent = 'Webull 行情检测中';
+}
+
+function getSelectedWebullPayload(){
+  if(selectedRecommendationSource === 'unusual' && selectedUnusualRow?.best_plan){
+    return buildLivePayload(selectedUnusualRow.best_plan, {
+      symbol: selectedUnusualRow.symbol,
+      name: selectedUnusualRow.name,
+      source: 'unusual',
+      notes: selectedUnusualRow.reason_cn || '',
+    });
+  }
+  if(selectedTop50Row?.best_plan){
+    return buildLivePayload(selectedTop50Row.best_plan, {
+      symbol: selectedTop50Row.symbol,
+      name: selectedTop50Row.name,
+      source: 'top50',
+      notes: selectedTop50Row.reason_cn || '',
+    });
+  }
+  if(selectedUnusualRow?.best_plan){
+    return buildLivePayload(selectedUnusualRow.best_plan, {
+      symbol: selectedUnusualRow.symbol,
+      name: selectedUnusualRow.name,
+      source: 'unusual',
+      notes: selectedUnusualRow.reason_cn || '',
+    });
+  }
+  if(window.__lastScanData?.trade_plans?.length){
+    return {
+      trade_plans: window.__lastScanData.trade_plans,
+      trade_plan: window.__lastScanData.trade_plans[0],
+      symbol: window.__lastScanData.symbol || currentSymbol,
+      source: 'scan',
+    };
+  }
+  return null;
+}
+
+function closeWebullPrecheck(){
+  $('webull-precheck-modal')?.classList.remove('show');
+}
+
+function renderWebullPrecheck(result, payload){
+  const selected = result?.selected || payload?.trade_plan || payload || {};
+  const snapshot = result?.snapshot || {};
+  const reasons = Array.isArray(snapshot.block_reasons) ? snapshot.block_reasons : [];
+  const qty = result?.order?.quantity ?? selected.qty ?? 1;
+  const entry = result?.order?.limit_price ?? selected.entry ?? selected.ask ?? selected.last ?? selected.entry_price ?? '—';
+  const unitCost = Number(entry) * 100;
+  const totalCost = unitCost * Number(qty || 1);
+  const budgetRatio = snapshot.budget_limit ? (totalCost / Number(snapshot.budget_limit || 0) * 100) : null;
+  const grid = [
+    ['标的', payload?.symbol || selected.symbol || currentSymbol],
+    ['期权合约', selected.contract || '—'],
+    ['方向', selected.type || selected.option_type || '—'],
+    ['到期日', selected.expiry || '—'],
+    ['行权价', selected.strike ?? '—'],
+    ['数量', qty],
+    ['限价', entry],
+    ['单张成本', Number.isFinite(unitCost) ? fmt(unitCost, 2) : '—'],
+    ['预计总成本', Number.isFinite(totalCost) ? fmt(totalCost, 2) : '—'],
+    ['预算占比', budgetRatio != null && Number.isFinite(budgetRatio) ? `${fmt(budgetRatio, 2)}%` : '—'],
+    ['来源', payload?.source || selected.source || 'scan'],
+    ['账户号', snapshot.account_number || '—'],
+    ['内部 ID', snapshot.account_id || '—'],
+    ['预算上限', fmt(snapshot.budget_limit, 2)],
+    ['剩余预算', fmt(snapshot.remaining_budget, 2)],
+  ];
+  $('webull-precheck-grid').innerHTML = grid.map(([label, value]) => `
+    <div class="modal-meta">
+      <div class="modal-meta-label">${escHtml(label)}</div>
+      <div class="modal-meta-value">${escHtml(String(value ?? '—'))}</div>
+    </div>
+  `).join('');
+  $('webull-precheck-blockers').innerHTML = reasons.length
+    ? reasons.map(item => `<div class="risk-item">${escHtml(item)}</div>`).join('')
+    : '当前风控通过，可以提交订单。';
+  $('webull-precheck-preview').textContent = JSON.stringify({
+    status: result?.status || 'preview_only',
+    preview: result?.preview || {},
+    ranked: (result?.ranked || []).slice(0, 3).map(item => ({
+      contract: item.contract,
+      score: item.score,
+      live_score: item._live_score,
+      entry: item.entry,
+      ask: item.ask,
+    })),
+  }, null, 2);
+  const canSubmit = !!snapshot.connected && !snapshot.order_blocked && !(result?.preview?.error);
+  const confirmBtn = $('webull-precheck-confirm');
+  if(confirmBtn){
+    confirmBtn.disabled = !canSubmit;
+    confirmBtn.textContent = canSubmit ? '确认提交' : '当前不可提交';
+  }
+  $('webull-precheck-modal')?.classList.add('show');
+}
+
+function buildWebullPrecheckFromStatus(snapshot, payload, errorText = ''){
+  const plan = payload?.trade_plan || payload || {};
+  return {
+    status: 'blocked',
+    selected: plan,
+    ranked: Array.isArray(payload?.trade_plans) ? payload.trade_plans : [],
+    preview: errorText ? { error: errorText } : {},
+    snapshot: snapshot || {},
+  };
+}
+
+async function runWebullPrecheck(payload){
+  const snapshot = await refreshWebullStatus();
+  if(!snapshot) return null;
+  if(!snapshot.connected){
+    const result = buildWebullPrecheckFromStatus(snapshot, payload, snapshot.last_error || 'Webull 未连接');
+    renderWebullPrecheck(result, payload);
+    return result;
+  }
+  if(snapshot.order_blocked){
+    const result = buildWebullPrecheckFromStatus(snapshot, payload, (snapshot.block_reasons || []).join('；') || '当前风控限制无法提交');
+    renderWebullPrecheck(result, payload);
+    return result;
+  }
+  const preview = await executeWebullPayload(payload, { force: true, previewOnly: true });
+  if(preview){
+    renderWebullPrecheck(preview, payload);
+  }
+  return preview;
+}
+
+async function executeWebullPayload(payload, { force = false, previewOnly = false, preventDuplicate = false } = {}){
+  const settings = getWebullSettings();
+  const body = {
+    force,
+    preview_only: previewOnly,
+    prevent_duplicate: preventDuplicate,
+    settings,
+    trade_plan: payload?.trade_plan || payload,
+    strategy_notes: settings.strategy_notes,
+  };
+  if(Array.isArray(payload?.trade_plans)){
+    body.trade_plans = payload.trade_plans;
+  }
+  try{
+    const res = await fetch(`${API}/api/webull/execute`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast(data.status === 'preview_only' ? '已预览 Webull 订单' : 'Webull 订单已提交');
+    await refreshWebullStatus();
+    return data;
+  }catch(e){
+    toast(`Webull 执行失败: ${e.message}`);
+    await refreshWebullStatus();
+    return null;
+  }
+}
+
+async function buyLiveFromEncoded(encoded){
+  try{
+    const payload = JSON.parse(decodeURIComponent(encoded || ''));
+    pendingWebullPayload = payload;
+    return await runWebullPrecheck(payload);
+  }catch(e){
+    toast(`Webull 执行失败: ${e.message}`);
+    return null;
+  }
+}
+
+async function executeSelectedWebull(){
+  const payload = getSelectedWebullPayload();
+  if(!payload){
+    toast('没有可执行的交易计划');
+    return null;
+  }
+  pendingWebullPayload = payload;
+  return await runWebullPrecheck(payload);
+}
+
+async function confirmWebullPrecheck(){
+  if(!pendingWebullPayload){
+    toast('没有待确认的 Webull 订单');
+    return null;
+  }
+  const submitted = await executeWebullPayload(pendingWebullPayload, { force: true, preventDuplicate: true });
+  if(submitted){
+    closeWebullPrecheck();
+    pendingWebullPayload = null;
+  }
+  return submitted;
+}
+
+async function autoExecuteWebull(scan){
+  const settings = getWebullSettings();
+  if(!settings.enabled || !settings.auto_execute_on_scan) return null;
+  const tradePlans = scan?.trade_plans || [];
+  if(!tradePlans.length) return null;
+  return await executeWebullPayload({
+    trade_plans: tradePlans,
+    trade_plan: tradePlans[0],
+    symbol: scan.symbol || currentSymbol,
+  }, { force: false, preventDuplicate: true });
+}
+
+async function openWebullFromPayload(payload){
+  if(!payload){
+    toast('没有可执行的交易计划');
+    return null;
+  }
+  pendingWebullPayload = payload;
+  return await runWebullPrecheck(payload);
+}
+
+async function executeTop50FocusLive(){
+  if(!selectedTop50Row?.best_plan){
+    toast('请先在 Top50 中选择一条期权计划');
+    return null;
+  }
+  return await openWebullFromPayload(buildLivePayload(selectedTop50Row.best_plan, {
+    symbol: selectedTop50Row.symbol,
+    name: selectedTop50Row.name,
+    source: 'top50',
+    notes: selectedTop50Row.reason_cn || '',
+  }));
+}
+
+async function executeUnusualFocusLive(){
+  if(!selectedUnusualRow?.best_plan){
+    toast('请先在异常期权中选择一条期权计划');
+    return null;
+  }
+  return await openWebullFromPayload(buildLivePayload(selectedUnusualRow.best_plan, {
+    symbol: selectedUnusualRow.symbol,
+    name: selectedUnusualRow.name,
+    source: 'unusual',
+    notes: selectedUnusualRow.reason_cn || '',
+  }));
+}
+
+let selectedLibraryFile = null;
+let selectedFolderFiles = [];
+let tesseractLoaderPromise = null;
+
+async function refreshLibrary(){
+  try{
+    const res = await fetch(`${API}/api/library/files`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderLibrary(data.files || [], data.profile || {});
+  }catch(e){
+    $('library-list').innerHTML = `<div class="error-msg">经验库加载失败：${e.message}</div>`;
+    $('library-summary').textContent = '';
+  }
+}
+
+function updateLibrarySummary(profile){
+  if(!profile){
+    $('library-summary').textContent = '';
+    return;
+  }
+  const c = profile.conclusion || {};
+  const focus = (profile.focus_tags || []).slice(0, 6).join(' / ') || '—';
+  const conclusion = c.summary || profile.ai_summary || '暂无明确结论';
+  const cards = [
+    ['样本', `${profile.total || 0} 张`, `已标注 ${profile.labeled || 0} 张`],
+    ['方向', c.direction || 'neutral', `信心 ${c.confidence ?? 0}`],
+    ['DTE', c.dte_style || 'mixed', `结构 ${c.structure || 'both'}`],
+    ['IV', c.iv_style || 'balanced', `Focus ${focus}`],
+    ['入场', c.entry_style || 'range_or_confirmation', `风险 ${c.risk_style || 'balanced'}`],
+    ['结构', c.structure_hint || '—', `画像 ${profile.scope || 'stock_and_options'}`],
+  ];
+  const lines = [
+    `<div class="profile-grid">${cards.map(([t,v,n]) => `
+      <div class="profile-card">
+        <div class="profile-card-title">${t}</div>
+        <div class="profile-card-value">${v}</div>
+        <div class="profile-card-note">${n}</div>
+      </div>
+    `).join('')}</div>`,
+    `<div class="strategy-summary" style="margin-top:8px">${conclusion}</div>`,
+  ];
+  if(profile.ai_summary){
+    lines.push(`<div class="strategy-summary">${profile.ai_summary}</div>`);
+  }
+  $('library-summary').innerHTML = lines.join('');
+}
+
+function renderLibrary(files, profile){
+  updateLibrarySummary(profile);
+  if(!files.length){
+    $('library-list').innerHTML = '<div style="font-size:10px;color:var(--text3)">没有找到图片。你可以选择本地文件夹自动扫描，或者把截图放进 `chart_library/incoming/`。</div>';
+    return;
+  }
+  $('library-list').innerHTML = files.map(f=>{
+    const tags = (f.tags || []).map(t=>`<span class="tag-pill">${t}</span>`).join('');
+    const sel = selectedLibraryFile === f.name ? 'selected' : '';
+    return `
+      <div class="library-item ${sel}" data-file="${f.name}">
+        <img class="library-thumb" src="${f.url}" alt="${f.name}" />
+        <div class="library-item-head">
+          <div class="library-item-name">${f.name}</div>
+          <div class="library-item-meta">${f.status || 'unlabeled'}</div>
+        </div>
+        <div class="library-item-meta">${f.mtime || ''}</div>
+        <div class="library-tags">${tags || '<span class="tag-pill">none</span>'}</div>
+        <div class="library-item-meta">${(f.notes || '').slice(0, 80)}</div>
+        <div class="library-actions">
+          <button class="library-mini" onclick="selectLibraryFile('${f.name}')">选择</button>
+          <button class="library-mini" onclick="saveLibraryMeta('${f.name}')">保存标签</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  $('library-list').querySelectorAll('.library-item').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      selectedLibraryFile = el.getAttribute('data-file');
+    });
+  });
+}
+
+async function ensureTesseract(){
+  if(window.Tesseract) return window.Tesseract;
+  if(!tesseractLoaderPromise){
+    tesseractLoaderPromise = new Promise((resolve, reject)=>{
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      script.async = true;
+      script.onload = ()=>resolve(window.Tesseract);
+      script.onerror = ()=>reject(new Error('无法加载 OCR 引擎'));
+      document.head.appendChild(script);
+    });
+  }
+  return tesseractLoaderPromise;
+}
+
+function inferLibraryTags(text, filename=''){
+  const content = `${filename}\n${text}`.toLowerCase();
+  const tags = [];
+  const add = (tag) => { if(!tags.includes(tag)) tags.push(tag); };
+  if(/bullish|call|long|breakout|buy call/.test(content)) add('bullish');
+  if(/bearish|put|short|breakdown|sell put/.test(content)) add('bearish');
+  if(/breakout|new high|resistance break/.test(content)) add('breakout');
+  if(/breakdown|new low|support break/.test(content)) add('breakdown');
+  if(/7dte|0dte|weekly|this week/.test(content)) add('7dte');
+  if(/30dte|monthly|next month/.test(content)) add('30dte');
+  if(/high iv|ivr\s*7|rich iv|volatility high/.test(content)) add('high_iv');
+  if(/low iv|ivr\s*[0-3]|cheap iv|volatility low/.test(content)) add('low_iv');
+  if(/win|profit|take profit|target hit|success/.test(content)) add('success');
+  if(/loss|stop loss|failed|fail/.test(content)) add('fail');
+  if(/call/.test(content) && !/put/.test(content)) add('call');
+  if(/put/.test(content) && !/call/.test(content)) add('put');
+  return tags;
+}
+
+function inferLibrarySymbol(text, filename=''){
+  const matches = `${filename}\n${text}`.match(/\b[A-Z]{1,5}\b/g) || [];
+  const common = ['CALL','PUT','IV','DTE','VWAP','ATR','RSI','SMA','EMA','MACD','OI','TP','SL'];
+  const symbol = matches.find(s => !common.includes(s));
+  return symbol || '';
+}
+
+async function ocrImageFile(file, onProgress){
+  const Tesseract = await ensureTesseract();
+  if(!Tesseract) throw new Error('OCR 引擎不可用');
+  const result = await Tesseract.recognize(file, 'eng', {
+    logger: onProgress,
+  });
+  return result?.data?.text || '';
+}
+
+async function uploadFilesToServer(files){
+  if(!files || !files.length) return [];
+  const form = new FormData();
+  Array.from(files).forEach(f=>form.append('files', f));
+  const res = await fetch(`${API}/api/library/upload`, { method:'POST', body: form });
+  const data = await res.json();
+  if(data.error) throw new Error(data.error);
+  return data.saved || [];
+}
+
+async function batchUpdateLibrary(items){
+  if(!items.length) return;
+  const res = await fetch(`${API}/api/library/batch_update`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ items })
+  });
+  const data = await res.json();
+  if(data.error) throw new Error(data.error);
+  return data;
+}
+
+async function scanSelectedFolder(){
+  const files = selectedFolderFiles.filter(f => (f.type || '').startsWith('image/'));
+  if(!files.length){
+    toast('先选择一个文件夹');
+    return;
+  }
+
+  $('library-progress').textContent = `准备导入 ${files.length} 张图片...`;
+  try{
+    const savedNames = await uploadFilesToServer(files);
+    const payload = [];
+    for(let i = 0; i < files.length; i++){
+      const file = files[i];
+      const saved = savedNames[i] || file.name;
+      $('library-progress').textContent = `OCR ${i + 1}/${files.length} ${file.name}`;
+      let text = '';
+      try{
+        text = await ocrImageFile(file, (m)=>{
+          if(m && m.status){
+            $('library-progress').textContent = `OCR ${i + 1}/${files.length} ${file.name} - ${m.status}`;
+          }
+        });
+      }catch(err){
+        text = '';
+      }
+      const autoTags = inferLibraryTags(text, file.name);
+      payload.push({
+        filename: saved,
+        tags: autoTags,
+        auto_tags: autoTags,
+        notes: text.slice(0, 300),
+        ocr_text: text,
+        ocr_summary: text.slice(0, 500),
+        symbol: inferLibrarySymbol(text, file.name),
+        status: autoTags.includes('success') ? 'success' : autoTags.includes('fail') ? 'fail' : (autoTags[0] || 'unlabeled'),
+        source_folder: (file.webkitRelativePath || '').split('/')[0] || '',
+        import_mode: 'local_folder',
+      });
+    }
+    await batchUpdateLibrary(payload);
+    $('library-progress').textContent = `完成：${files.length} 张图片已扫描`;
+    toast(`文件夹扫描完成 ${files.length} 张`);
+    selectedFolderFiles = [];
+    refreshLibrary();
+  }catch(e){
+    $('library-progress').textContent = `失败：${e.message}`;
+    toast('文件夹扫描失败: ' + e.message);
+  }
+}
+
+function selectLibraryFile(name){
+  selectedLibraryFile = name;
+  refreshLibrary();
+}
+
+async function saveLibraryMeta(filename){
+  try{
+    const res = await fetch(`${API}/api/library/update`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        filename,
+        tags: [$('library-tag').value],
+        notes: $('library-note').value.trim(),
+        symbol: $('ticker-input').value.trim().toUpperCase(),
+        status: $('library-tag').value,
+      })
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast(`已保存 ${filename}`);
+    refreshLibrary();
+  }catch(e){
+    toast('保存失败: ' + e.message);
+  }
+}
+
+async function uploadLibraryFiles(files){
+  if(!files || !files.length) return;
+  try{
+    const saved = await uploadFilesToServer(files);
+    toast(`上传完成 ${ saved.length } 张`);
+    refreshLibrary();
+  }catch(e){
+    toast('上传失败: ' + e.message);
+  }
+}
+
+async function runTop50(refresh=false){
+  $('top50-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">筛选中...</td></tr>';
+  $('universe-meta').textContent = refresh ? '刷新中...' : '分析中...';
+  try{
+    const res = await fetch(`${API}/api/universe/top50`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        limit: 20,
+        universe_size: 120,
+        refresh,
+        use_library_bias: true,
+        cache_max_age_hours: 6,
+        prefer_cached: true,
+        max_runtime_seconds: 20
+      })
+    });
+    const data = await readJsonSafe(res);
+    if(data.error) throw new Error(data.error);
+    renderTop50(data);
+  }catch(e){
+    $('top50-body').innerHTML = `<tr><td colspan="7" style="color:var(--red);padding:10px">筛选失败：${e.message}</td></tr>`;
+    $('universe-meta').textContent = '失败';
+  }
+}
+
+function renderTop50(data){
+  const rows = data.rows || [];
+  window.__top50Rows = rows;
+  $('universe-meta').textContent = `${data.returned || rows.length} / ${data.analyzed_size || 0} | ${data.universe_size || 0} universe`;
+  if(!rows.length){
+    $('top50-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">没有可用结果</td></tr>';
+    $('top50-focus-main').textContent = '没有可用结果';
+    $('top50-focus-sub').textContent = '';
+    $('top50-open-btn').disabled = true;
+    $('top50-live-btn').disabled = true;
+    selectedTop50Row = null;
+    return;
+  }
+  $('top50-body').innerHTML = rows.map((row, idx)=>{
+    const plan = row.best_plan || {};
+    const contract = plan.contract || '—';
+    const entry = plan.entry != null ? fmt(plan.entry) : '—';
+    const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
+    const tp = plan.take_profit != null ? fmt(plan.take_profit) : '—';
+    const reason = escHtml(row.reason_cn || '—');
+    const analysis = escHtml(row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`);
+    const sector = escHtml(row.sector || '—');
+    const industry = escHtml(row.industry || '—');
+    const news = escHtml(row.news_headline || '');
+    return `
+      <tr>
+        <td>${idx+1}</td>
+        <td>
+          <button class="top50-symbol-btn" data-symbol="${escHtml(row.symbol)}" onclick="openTop50Symbol(this.dataset.symbol)">${escHtml(row.symbol)}</button>
+          <div style="color:var(--text3)">${escHtml(row.name || '')}</div>
+        </td>
+        <td>${formatMarketCap(row.market_cap)}</td>
+        <td>${fmt(row.spot)}</td>
+        <td>
+          <div class="top50-plan">${contract}</div>
+          <div style="color:var(--text3)">E ${entry} / S ${stop} / T ${tp}</div>
+        </td>
+        <td>${row.tech_bias || '—'}<br/>IVR ${fmt(row.iv_rank,1)}<br/>RR ${plan.risk_reward != null ? fmt(plan.risk_reward) : '—'}</td>
+        <td class="top50-score">${fmt(row.final_score)}</td>
+      </tr>
+    `;
+  }).join('');
+  if (!selectedTop50Row && rows.length) {
+    setTop50Focus(rows[0]);
+  } else if (selectedTop50Row) {
+    const current = rows.find(r => r.symbol === selectedTop50Row.symbol);
+    if (current) setTop50Focus(current);
+  }
+}
+
+function setTop50Focus(row){
+  if(!row) return;
+  selectedTop50Row = row;
+  selectedRecommendationSource = 'top50';
+  const plan = row.best_plan || {};
+  const contract = plan.contract || '—';
+  const entry = plan.entry != null ? fmt(plan.entry) : '—';
+  const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
+  const tp = plan.take_profit != null ? fmt(plan.take_profit) : '—';
+  const trigger = plan.underlying_trigger != null ? fmt(plan.underlying_trigger) : '—';
+  const invalidation = plan.underlying_invalidation != null ? fmt(plan.underlying_invalidation) : '—';
+  const rr = plan.risk_reward != null ? fmt(plan.risk_reward) : '—';
+  $('top50-focus-main').textContent = `${row.symbol} · ${row.name || ''} · ${contract}`;
+  $('top50-focus-sub').textContent = `${row.reason_cn || '—'} | ${row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
+  $('top50-open-btn').disabled = false;
+  $('top50-buy-btn').disabled = !plan.contract;
+  $('top50-live-btn').disabled = !plan.contract;
+}
+
+async function openTop50Symbol(symbol){
+  const s = (symbol || '').trim().toUpperCase();
+  if(!s) return;
+  const input = $('ticker-input');
+  if(input) input.value = s;
+  const row = (window.__top50Rows || []).find(item => item.symbol === s);
+  if(row) setTop50Focus(row);
+  await doScan();
+}
+
+async function openSelectedTop50Scan(){
+  if(!selectedTop50Row) return;
+  await openTop50Symbol(selectedTop50Row.symbol);
+}
+
+function encodeSimPayload(payload){
+  return encodeURIComponent(JSON.stringify(payload || {}));
+}
+
+function buildSimPayload(plan, origin = {}){
+  return {
+    symbol: plan.symbol || origin.symbol || currentSymbol,
+    name: origin.name || plan.name || '',
+    contract: plan.contract || '',
+    option_type: plan.type || plan.option_type || 'CALL',
+    expiry: plan.expiry || '',
+    strike: plan.strike,
+    dte: plan.dte,
+    iv_pct: plan.iv_pct,
+    risk_reward: plan.risk_reward,
+    qty: 1,
+    source: origin.source || plan.source || 'scan',
+    notes: origin.notes || plan.reason || '',
+    entry_price: null,
+    trade_plan: plan,
+    origin,
+  };
+}
+
+async function buySimFromEncoded(encoded){
+  try{
+    const payload = JSON.parse(decodeURIComponent(encoded || ''));
+    const res = await fetch(`${API}/api/sim/open`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
+    await refreshSimPortfolio();
+  }catch(e){
+    toast(`模拟买入失败: ${e.message}`);
+  }
+}
+
+async function buySimFromTop50(){
+  if(!selectedTop50Row || !selectedTop50Row.best_plan) return;
+  const payload = buildSimPayload(selectedTop50Row.best_plan, {
+    symbol: selectedTop50Row.symbol,
+    name: selectedTop50Row.name,
+    source: 'top50',
+    notes: selectedTop50Row.reason_cn || '',
+  });
+  try{
+    const res = await fetch(`${API}/api/sim/open`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
+    await refreshSimPortfolio();
+  }catch(e){
+    toast(`模拟买入失败: ${e.message}`);
+  }
+}
+
+async function runUnusual(refresh=false){
+  $('unusual-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">异常扫描中...</td></tr>';
+  $('unusual-meta').textContent = refresh ? '刷新中...' : '扫描中...';
+  try{
+    const res = await fetch(`${API}/api/unusual/daily`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        limit: 20,
+        universe_size: 120,
+        refresh,
+        min_dte: 1,
+        max_dte: 45,
+        min_volume: 50,
+        min_premium: 25000,
+        max_symbols: 12,
+        top_per_symbol: 4,
+        use_library_bias: true,
+        cache_max_age_hours: 6,
+        prefer_cached: true,
+        prefilter_multiplier: 2.5,
+        max_runtime_seconds: 20
+      })
+    });
+    const data = await readJsonSafe(res);
+    if(data.error) throw new Error(data.error);
+    renderUnusual(data);
+  }catch(e){
+    $('unusual-body').innerHTML = `<tr><td colspan="7" style="color:var(--red);padding:10px">异常扫描失败：${e.message}</td></tr>`;
+    $('unusual-meta').textContent = '失败';
+  }
+}
+
+function renderUnusual(data){
+  const rows = data.rows || [];
+  window.__unusualRows = rows;
+  const cacheText = data.cached ? 'cache' : 'live';
+  $('unusual-meta').textContent = `${data.returned || rows.length} / ${data.prefiltered_size || 0} | ${cacheText}`;
+  if(!rows.length){
+    $('unusual-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">没有发现符合阈值的异常期权</td></tr>';
+    $('unusual-focus-main').textContent = '没有可用结果';
+    $('unusual-focus-sub').textContent = '';
+    $('unusual-open-btn').disabled = true;
+    $('unusual-buy-btn').disabled = true;
+    $('unusual-live-btn').disabled = true;
+    selectedUnusualRow = null;
+    return;
+  }
+  $('unusual-body').innerHTML = rows.map((row, idx)=>{
+    const plan = row.best_plan || {};
+    const contract = plan.contract || row.contract?.name || '—';
+    const entry = plan.entry != null ? fmt(plan.entry) : '—';
+    const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
+    const tp = plan.take_profit != null ? fmt(plan.take_profit) : '—';
+    const ratio = row.vol_oi_ratio != null ? `${fmt(row.vol_oi_ratio)}x` : '—';
+    const premium = formatDollar(row.premium);
+    const reason = escHtml(row.reason_cn || '—');
+    return `
+      <tr onclick="setUnusualFocus(window.__unusualRows[${idx}])">
+        <td>${idx+1}</td>
+        <td>
+          <button class="top50-symbol-btn" data-symbol="${escHtml(row.symbol)}" onclick="event.stopPropagation(); openUnusualSymbol(this.dataset.symbol)">${escHtml(row.symbol)}</button>
+          <div style="color:var(--text3)">${escHtml(row.name || '')}</div>
+        </td>
+        <td>
+          <div class="unusual-chip">Vol/OI ${ratio}</div>
+          <div style="color:var(--text3);margin-top:3px">Prem ${premium}<br/>Vol ${fmtK(row.volume)} / OI ${fmtK(row.oi)}</div>
+        </td>
+        <td>
+          <div class="top50-plan">${escHtml(contract)}</div>
+          <div style="color:var(--text3)">${escHtml(row.option_type || '')} DTE ${row.dte ?? '—'} / IV ${fmtPct(row.iv_pct)}</div>
+        </td>
+        <td>E ${entry}<br/>S ${stop}<br/>T ${tp}<br/>RR ${plan.risk_reward != null ? fmt(plan.risk_reward) : '—'}</td>
+        <td><div class="top50-reason">${reason}</div></td>
+        <td class="top50-score">${fmt(row.final_score)}</td>
+      </tr>
+    `;
+  }).join('');
+  setUnusualFocus(rows[0]);
+}
+
+function setUnusualFocus(row){
+  if(!row) return;
+  selectedUnusualRow = row;
+  selectedRecommendationSource = 'unusual';
+  const plan = row.best_plan || {};
+  const contract = plan.contract || row.contract?.name || '—';
+  const entry = plan.entry != null ? fmt(plan.entry) : '—';
+  const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
+  const tp = plan.take_profit != null ? fmt(plan.take_profit) : '—';
+  const trigger = plan.underlying_trigger != null ? fmt(plan.underlying_trigger) : '—';
+  const invalidation = plan.underlying_invalidation != null ? fmt(plan.underlying_invalidation) : '—';
+  const rr = plan.risk_reward != null ? fmt(plan.risk_reward) : '—';
+  $('unusual-focus-main').textContent = `${row.symbol} · ${row.name || ''} · ${contract}`;
+  $('unusual-focus-sub').textContent = `${row.reason_cn || '—'} | ${row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
+  $('unusual-open-btn').disabled = false;
+  $('unusual-buy-btn').disabled = !plan.contract;
+  $('unusual-live-btn').disabled = !plan.contract;
+}
+
+async function openUnusualSymbol(symbol){
+  const s = (symbol || '').trim().toUpperCase();
+  if(!s) return;
+  const input = $('ticker-input');
+  if(input) input.value = s;
+  const row = (window.__unusualRows || []).find(item => item.symbol === s);
+  if(row) setUnusualFocus(row);
+  await doScan();
+}
+
+async function openSelectedUnusualScan(){
+  if(!selectedUnusualRow) return;
+  await openUnusualSymbol(selectedUnusualRow.symbol);
+}
+
+async function buySimFromUnusual(){
+  if(!selectedUnusualRow || !selectedUnusualRow.best_plan) return;
+  const payload = buildSimPayload(selectedUnusualRow.best_plan, {
+    symbol: selectedUnusualRow.symbol,
+    name: selectedUnusualRow.name,
+    source: 'unusual',
+    notes: selectedUnusualRow.reason_cn || '',
+  });
+  try{
+    const res = await fetch(`${API}/api/sim/open`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
+    await refreshSimPortfolio();
+  }catch(e){
+    toast(`模拟买入失败: ${e.message}`);
+  }
+}
+
+async function executeSelectedUnusual(){
+  return await executeUnusualFocusLive();
+}
+
+async function closeSimTrade(id){
+  try{
+    const res = await fetch(`${API}/api/sim/close`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id})
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    toast('已平仓');
+    await refreshSimPortfolio();
+  }catch(e){
+    toast(`平仓失败: ${e.message}`);
+  }
+}
+
+function renderSimPortfolio(data){
+  latestSimPortfolio = data || null;
+  const summary = data.summary || {};
+  renderLearningProfile(data.learning || {});
+  $('sim-sub').textContent = data.updated_at ? `更新于 ${data.updated_at}` : '未开仓';
+  $('sim-open-count').textContent = summary.open_count ?? 0;
+  $('sim-open-pnl').textContent = fmt(summary.open_unrealized_pnl, 2);
+  $('sim-open-pnl').className = `sim-card-value ${(summary.open_unrealized_pnl || 0) >= 0 ? 'pos' : 'neg'}`;
+  $('sim-realized-pnl').textContent = fmt(summary.realized_pnl, 2);
+  $('sim-realized-pnl').className = `sim-card-value ${(summary.realized_pnl || 0) >= 0 ? 'pos' : 'neg'}`;
+  $('sim-win-rate').textContent = `${fmt(summary.win_rate, 2)}%`;
+  $('sim-total-pnl').textContent = fmt(summary.total_pnl, 2);
+  $('sim-total-pnl').className = `sim-card-value ${(summary.total_pnl || 0) >= 0 ? 'pos' : 'neg'}`;
+
+  const openTrades = data.open_trades || [];
+  if(!openTrades.length){
+    $('sim-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">暂无模拟持仓</td></tr>';
+  }else{
+    $('sim-body').innerHTML = openTrades.map(trade => {
+      const pnl = trade.unrealized_pnl ?? 0;
+      const pnlPct = trade.unrealized_pnl_pct ?? 0;
+      const mark = trade.last_mark != null ? fmt(trade.last_mark) : '—';
+      const entry = trade.entry_price != null ? fmt(trade.entry_price) : '—';
+      const pnlClass = pnl >= 0 ? 'pos' : 'neg';
+      const pnlText = `${fmt(pnl, 2)} / ${fmt(pnlPct, 2)}%`;
+      return `
+        <tr>
+          <td>${escHtml(trade.symbol || '')}</td>
+          <td>
+            <div>${escHtml(trade.contract || '')}</div>
+            <div style="color:var(--text3)">${escHtml(trade.option_type || '')} · Qty ${trade.qty || 1}</div>
+          </td>
+          <td>${entry}</td>
+          <td>${mark}</td>
+          <td class="sim-${pnlClass}">${pnlText}</td>
+          <td>${escHtml(trade.status || 'open')}<br/><span style="color:var(--text3)">${escHtml(trade.updated_at || '')}</span></td>
+          <td><button class="sim-mini-btn" onclick="closeSimTrade('${escHtml(trade.id)}')">平仓</button></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  const closed = data.closed_trades || [];
+  const latest = closed.slice(-3).reverse();
+  if(!closed.length){
+    $('sim-history').textContent = '系统会自动保存每次开仓和平仓，以及持仓期间的价格轨迹。';
+  }else{
+    const lines = latest.map(t => `${t.symbol} ${t.contract} | ${t.status} | ${fmt(t.realized_pnl,2)} | ${t.closed_at || ''}`);
+    $('sim-history').textContent = `最近平仓：\n${lines.join('\n')}\n\n总计：开仓 ${summary.open_count || 0}，平仓 ${summary.closed_count || 0}，胜率 ${fmt(summary.win_rate,2)}%`;
+  }
+  updateTradeCompare();
+}
+
+async function refreshSimPortfolio(){
+  try{
+    const res = await fetch(`${API}/api/sim/portfolio`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderSimPortfolio(data);
+  }catch(e){
+    $('sim-sub').textContent = `加载失败：${e.message}`;
+  }
+}
+
+function formatMarketCap(v){
+  if(v==null) return '—';
+  const n = Number(v);
+  if(!Number.isFinite(n)) return '—';
+  if(n >= 1e12) return (n/1e12).toFixed(2)+'T';
+  if(n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  return n.toFixed(0);
+}
+
+function formatDollar(v){
+  if(v==null) return '—';
+  const n = Number(v);
+  if(!Number.isFinite(n)) return '—';
+  if(n >= 1e9) return '$'+(n/1e9).toFixed(2)+'B';
+  if(n >= 1e6) return '$'+(n/1e6).toFixed(2)+'M';
+  if(n >= 1e3) return '$'+(n/1e3).toFixed(1)+'K';
+  return '$'+n.toFixed(0);
+}
+
+function formatLearningPref(value, map = {}){
+  const key = String(value || '').toLowerCase();
+  return map[key] || value || '—';
+}
+
+function renderLearningProfile(profile = {}){
+  const prefs = profile.preferences || {};
+  $('learning-confidence').textContent = `置信度 ${profile.confidence != null ? fmt(profile.confidence, 2) : '--'} / 样本 ${profile.closed_count ?? 0}`;
+  $('learning-direction').textContent = formatLearningPref(prefs.direction, {
+    call: '偏 CALL',
+    put: '偏 PUT',
+    balanced: '双向均衡',
+  });
+  $('learning-dte').textContent = formatLearningPref(prefs.dte, {
+    short: '短 DTE',
+    mid: '中 DTE',
+    long: '长 DTE',
+    balanced: '分布均衡',
+  });
+  $('learning-iv').textContent = formatLearningPref(prefs.iv, {
+    low: '低 IV',
+    mid: '中 IV',
+    high: '高 IV',
+    balanced: '分布均衡',
+  });
+  $('learning-rr').textContent = formatLearningPref(prefs.rr, {
+    low: '保守 RR',
+    mid: '中性 RR',
+    high: '进攻 RR',
+    balanced: '分布均衡',
+  });
+  $('learning-summary').textContent = profile.summary || '系统会基于你的模拟仓结果和经验图谱，自动微调筛选和评分。';
+}
+
+function setOverview(scan = {}){
+  const source = scan?.source ? `${scan.source.history}/${scan.source.options}/${scan.source.spot}` : '--';
+  const bestPlan = scan?.trade_plans?.[0] || scan?.strategy?.best_plan || {};
+  const planText = bestPlan.contract ? `${bestPlan.contract} · RR ${bestPlan.risk_reward != null ? fmt(bestPlan.risk_reward) : '—'}` : '等待扫描';
+  $('overview-symbol').textContent = scan?.symbol || currentSymbol || 'SPY';
+  $('overview-source').textContent = source;
+  $('overview-ai').textContent = scan?.ai_mode || getSettings().ai_mode || 'single';
+  if(scan?.webull_market){
+    renderWebullMarketStatus(scan.webull_market.probe || {});
+  }
+  $('overview-plan').textContent = planText;
+  $('overview-update').textContent = new Date().toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+// ── 主扫描 ──────────────────────────────────────────────────
+async function refreshLongbridgeStatus(){
+  try{
+    const res = await fetch(`${API}/api/market_temperature?market=US`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    $('auth-info').textContent = `US ${data.temperature} / ${data.description}`;
+    $('auth-status').textContent = 'VALID';
+    $('auth-status').className = 'auth-status auth-valid';
+    $('auth-status').style.color = '';
+  }catch(e){
+    $('auth-info').textContent = 'Longbridge unavailable';
+    $('auth-status').textContent = 'ERROR';
+    $('auth-status').className = 'auth-status';
+    $('auth-status').style.color = 'var(--red)';
+  }
+}
+
+window.addEventListener('load', ()=>{
+  loadSettings();
+  loadWebullSettingsFromServer();
+  initWorkspaceTabs();
+  initSectionToggles();
+  refreshLibrary();
+  refreshLongbridgeStatus();
+  refreshWebullStatus();
+  renderLearningProfile({});
+  setInterval(()=>{
+    if(window.__webullConnected || $('webull-auto-enabled')?.checked){
+      refreshWebullStatus();
+    }
+  }, 120000);
+  refreshSimPortfolio();
+  setInterval(refreshSimPortfolio, 20000);
+  refreshTopbarClock();
+  setInterval(refreshTopbarClock, 1000);
+  const folderInput = $('library-folder-input');
+  if(folderInput){
+    folderInput.addEventListener('change', e => {
+      selectedFolderFiles = Array.from(e.target.files || []);
+      $('library-progress').textContent = selectedFolderFiles.length ? `已选择 ${selectedFolderFiles.length} 张图片，等待开始扫描` : '未开始';
+    });
+  }
+  const uploadInput = $('library-upload-input');
+  if(uploadInput){
+    uploadInput.addEventListener('change', e => uploadLibraryFiles(e.target.files));
+  }
+  const precheckModal = $('webull-precheck-modal');
+  if(precheckModal){
+    precheckModal.addEventListener('click', e => {
+      if(e.target === precheckModal) closeWebullPrecheck();
+    });
+  }
+  const webullMarketToggle = $('webull-market-enabled');
+  if(webullMarketToggle){
+    webullMarketToggle.addEventListener('change', ()=> refreshWebullMarketStatus(currentSymbol || 'AAPL'));
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    closeWebullPrecheck();
+  }
+});
+
+async function doScan(){
+  const symbol  = ($('ticker-input').value||'SPY').trim().toUpperCase();
+  const minDte  = parseInt($('min-dte').value)||5;
+  const maxDte  = parseInt($('max-dte').value)||30;
+  const optType = $('opt-type').value;
+  const prompt  = $('cmd-input').value.trim();
+  const settings = getSettings();
+
+  currentSymbol = symbol;
+  $('badge-symbol').textContent = symbol;
+  $('scan-error').innerHTML = '';
+
+  const btn = $('scan-btn');
+  btn.innerHTML='<span class="spinner"></span>扫描中...';
+  btn.classList.add('loading');
+  $('topbar-task').textContent = 'running';
+
+  try {
+    const [scanRes, chartRes] = await Promise.all([
+      fetch(`${API}/api/scan`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          symbol,
+          min_dte:minDte,
+          max_dte:maxDte,
+          opt_type:optType,
+          top_n:8,
+          ai_prompt:prompt,
+          enable_ai: $('toggle-ai').checked,
+          ...settings
+        })
+      }),
+      fetch(`${API}/api/chart?symbol=${symbol}&kdays=60${settings.enable_webull_market_data ? '&prefer_webull_market=1' : ''}`)
+    ]);
+
+    const scan  = await readJsonSafe(scanRes);
+    const chart = await readJsonSafe(chartRes);
+
+    if(scan.error)  throw new Error(scan.error);
+    if(chart.error) console.warn('chart error', chart.error);
+
+    window.__lastScanData = scan;
+    setOverview(scan);
+    updateStatCards(scan);
+    updateStrategy(scan);
+    updateTradePlans(scan.trade_plans || [], scan);
+    updatePool(scan.contracts || []);
+    if(scan.library_conclusion){
+      $('stat-tag-sub').textContent = scan.library_conclusion.summary || '扫描完成';
+    }
+    if(!chart.error){ drawKChart(chart.daily||[], symbol); drawIntraChart(chart.intraday||[], symbol); }
+
+    if(prompt){ addHistory(prompt) }
+    if(($('webull-auto-enabled')?.checked) && ($('webull-auto-scan')?.checked)){
+      await autoExecuteWebull(scan);
+    }
+    toast(`完成 ${symbol} 扫描，获得 ${(scan.contracts||[]).length} 个合约`);
+  } catch(e){
+    $('scan-error').innerHTML=`<div class="error-msg">错误: ${e.message}</div>`;
+    toast('扫描失败: ' + e.message);
+  } finally {
+    btn.innerHTML='开始扫描';
+    btn.classList.remove('loading');
+  }
+}
+
+function updateStatCards(d){
+  const biasEl = $('stat-bias');
+  biasEl.textContent = d.tech_bias || '—';
+  biasEl.className   = 'stat-card-value';
+  if((d.tech_bias||'').includes('bull')) biasEl.style.color='var(--green)';
+  else if((d.tech_bias||'').includes('bear')) biasEl.style.color='var(--red)';
+  else biasEl.style.color='var(--yellow)';
+  $('stat-bias-sub').textContent = `SMA20 ${fmt(d.sma20)} / SMA50 ${fmt(d.sma50)}`;
+
+  $('stat-price').textContent = fmt(d.spot);
+  $('stat-rsi').textContent   = `RSI ${fmt(d.rsi,1)}  HV30 ${fmt(d.hv30)}%`;
+
+  fetchVwap(d.symbol||currentSymbol);
+
+  $('stat-ivr').textContent   = d.iv_rank!=null ? `IVR ${fmt(d.iv_rank,1)}` : '—';
+  $('stat-atm-iv').textContent= `ATM IV ${fmtPct(d.atm_iv)}`;
+  const ivrEl = $('stat-ivr');
+  if(d.iv_rank>=70) ivrEl.style.color='var(--red)';
+  else if(d.iv_rank<=30) ivrEl.style.color='var(--cyan)';
+  else ivrEl.style.color='var(--green)';
+
+  $('stat-task').textContent = 'succeeded';
+  $('topbar-task').textContent = 'succeeded';
+  $('stat-tag').textContent = d.signal || d.strategy?.title || '纯看涨单';
+  $('stat-tag-sub').textContent = d.strategy?.lines?.[0] || '扫描完成';
+  setOverview(d);
+}
+
+async function fetchVwap(symbol){
+  try{
+    const preferWebull = $('webull-market-enabled')?.checked ? '&prefer_webull_market=1' : '';
+    const r = await fetch(`${API}/api/vwap_pct?symbol=${symbol}${preferWebull}`);
+    const d = await r.json();
+    if(d.vwap_pct!=null){
+      const pct = d.vwap_pct;
+      $('stat-vwap').textContent = fmtPct(pct);
+      $('stat-vwap').style.color = pct>=0?'var(--green)':'var(--red)';
+      $('stat-vwap-sub').textContent = `VWAP $${fmt(d.vwap)}`;
+    }
+  }catch(e){}
+}
+
+// ── 策略区 ──────────────────────────────────────────────────
+function updateStrategy(d){
+  const strat = d.strategy||{};
+  const lines = strat.lines||[];
+  if(!lines.length){
+    $('strategy-body').innerHTML='<div style="font-size:11px;color:var(--text3)">暂无策略数据</div>';
+    return;
+  }
+
+  const lib = d.library_conclusion || {};
+  const sim = d.sim_learning || {};
+  const learning = d.learning_profile || strat.adaptive_learning || {};
+  const topContract = strat.top_contract || {};
+  const bestPlan = strat.best_plan || {};
+  const meta = [
+    ['偏向', strat.direction || d.tech_bias || 'neutral'],
+    ['DTE', strat.dte_mode || (bestPlan.dte ?? '—')],
+    ['IV', strat.iv_mode || `IVR ${fmt(d.iv_rank,1)}`],
+    ['RR', bestPlan.risk_reward != null ? fmt(bestPlan.risk_reward) : '—'],
+    ['AI', strat.ai_mode || d.ai_mode || 'single'],
+    ['主AI', strat.ai_provider || d.ai_provider || '—'],
+    ['入场风格', lib.entry_style || '—'],
+    ['风控', lib.risk_style || '—'],
+    ['模拟盘', sim.closed_count ? `${sim.closed_count} 笔` : '—'],
+    ['学习层', learning.closed_count ? `${learning.closed_count} 笔` : '—'],
+  ];
+
+  let html = `
+    <div class="strategy-title-h">${strat.title||''}</div>
+    <div class="strategy-summary">${strat.summary || lines[0] || ''}</div>
+    ${lib.summary ? `<div class="strategy-summary">${lib.summary}</div>` : ''}
+    ${sim.closed_count ? `<div class="strategy-summary">模拟学习：CALL ${sim.call_win_rate ?? '—'} / PUT ${sim.put_win_rate ?? '—'} / 短DTE ${sim.short_win_rate ?? '—'} / 中DTE ${sim.mid_win_rate ?? '—'} / 长DTE ${sim.long_win_rate ?? '—'}</div>` : ''}
+    ${learning.summary ? `<div class="strategy-summary">自主学习：${learning.summary}</div>` : ''}
+    <div class="strategy-meta-row">
+      ${meta.map(([label, value]) => `
+        <div class="strategy-meta">
+          <div class="strategy-meta-label">${label}</div>
+          <div class="strategy-meta-value">${value}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="strategy-lines">
+      ${lines.map(l=>`<div class="strategy-line">${l}</div>`).join('')}
+    </div>
+  `;
+
+  if(strat.structure_sections && strat.structure_sections.length){
+    html += `
+      <div class="analysis-grid">
+        ${strat.structure_sections.map(sec => `
+          <div class="analysis-card">
+            <div class="analysis-card-title">${sec.title || ''}</div>
+            <div class="analysis-bullets">
+              ${(sec.bullets || []).map(b => `<div class="analysis-bullet">${b}</div>`).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  if(strat.scenario_cards && strat.scenario_cards.length){
+    html += `
+      <div class="scenario-grid">
+        ${strat.scenario_cards.map(card => `
+          <div class="scenario-card">
+            <div class="scenario-card-label">${card.label || ''}</div>
+            <div class="scenario-card-title">${card.title || ''}</div>
+            <div class="scenario-card-desc">${card.desc || ''}</div>
+            <div class="scenario-card-meta">${card.meta || ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  if(strat.risk_checks && strat.risk_checks.length){
+    html += `
+      <div class="risk-list">
+        ${strat.risk_checks.map(r => `<div class="risk-item">${r}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  if(strat.ai_rounds && strat.ai_rounds.length){
+    html += `
+      <div class="ai-rounds">
+        ${strat.ai_rounds.map(round => `
+          <div class="ai-round">
+            <div class="ai-round-head">
+              <div class="ai-round-name">${round.provider || 'ai'}</div>
+              <div class="ai-round-tag">discussion</div>
+            </div>
+            <div class="ai-round-body">${round.content || ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  if(topContract && topContract.name){
+    html += `
+      <div class="ai-brief">
+        参考合约：${topContract.name}；执行偏好：${topContract.type || '—'}；到期：${topContract.expiry || '—'}
+      </div>
+    `;
+  }
+
+  if(d.signal){
+    html += `<div style="margin-top:6px;font-size:10px;color:var(--yellow);font-family:var(--mono)">${d.signal}</div>`;
+  }
+  if(strat.ai_brief){
+    html += `<div class="ai-brief">${strat.ai_brief}</div>`;
+  }
+  $('strategy-body').innerHTML = html;
+}
+
+function updateTradePlans(plans, scan){
+  $('trade-sub').textContent = scan?.source ? `${scan.source.history}/${scan.source.options}/${scan.source.spot}` : 'source --';
+  $('trade-source').textContent = scan?.signal ? scan.signal : 'source --';
+  if(!plans.length){
+    $('trade-grid').innerHTML='<div class="empty-state" style="grid-column:1/-1;padding:20px 10px"><div class="e-icon">▣</div><div>暂无可用交易计划</div></div>';
+    return;
+  }
+  $('trade-grid').innerHTML = plans.map((p, idx)=>{
+    const typeClass = p.type || 'CALL';
+    const rr = p.risk_reward != null ? (+p.risk_reward).toFixed(2) : '—';
+    const payload = encodeSimPayload(buildSimPayload(p, {symbol: scan?.symbol || currentSymbol, name: scan?.symbol || currentSymbol, source: 'scan', notes: p.reason || ''}));
+    const livePayload = encodeLivePayload(buildLivePayload(p, {symbol: scan?.symbol || currentSymbol, name: scan?.symbol || currentSymbol, source: 'scan', notes: p.reason || ''}));
+    return `
+      <div class="trade-card">
+        <div class="trade-card-head">
+          <div class="trade-card-name">#${idx+1} ${p.contract || ''}</div>
+          <div class="trade-card-badge ${typeClass}">${typeClass}</div>
+        </div>
+        <div class="trade-card-line">${p.direction || ''} 路 DTE ${p.dte ?? '—'} 路 IV ${fmtPct(p.iv_pct)}</div>
+        <div class="trade-kpis">
+          <div class="trade-kpi"><div class="trade-kpi-label">入场</div><div class="trade-kpi-value pos">${fmt(p.entry)}</div></div>
+          <div class="trade-kpi"><div class="trade-kpi-label">止损</div><div class="trade-kpi-value neg">${fmt(p.stop_loss)}</div></div>
+          <div class="trade-kpi"><div class="trade-kpi-label">止盈</div><div class="trade-kpi-value pos">${fmt(p.take_profit)}</div></div>
+          <div class="trade-kpi"><div class="trade-kpi-label">RR</div><div class="trade-kpi-value">${rr}</div></div>
+        </div>
+        <div class="trade-card-line">Underlying trigger ${fmt(p.underlying_trigger)} / invalidation ${fmt(p.underlying_invalidation)}</div>
+        <div class="trade-note">${p.reason || ''}</div>
+        <div style="margin-top:6px;display:flex;justify-content:flex-end;gap:4px">
+          <button class="sim-mini-btn" onclick="buySimFromEncoded('${payload}')">模拟买入</button>
+          <button class="trade-live-btn" onclick="buyLiveFromEncoded('${livePayload}')">实盘买入</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updatePool(contracts){
+  $('pool-count').textContent = `${contracts.length} 合约`;
+  if(!contracts.length){
+    $('pool-grid').innerHTML='<div class="empty-state"><div class="e-icon">○</div><div>暂无符合条件的期权合约</div></div>';
+    return;
+  }
+  $('pool-grid').innerHTML = contracts.map((c,i)=>contractCard(c,i+1)).join('');
+}
+
+function contractCard(c, n){
+  const typeClass = c.type==='CALL'?'CALL':'PUT';
+  const mono = c.moneyness!=null?(c.moneyness>=0?`+${c.moneyness}%`:`${c.moneyness}%`):'—';
+  const simPayload = encodeSimPayload(buildSimPayload({
+    ...c,
+    contract: c.name || '',
+    symbol: currentSymbol,
+    name: c.name || currentSymbol,
+  }, {
+    symbol: currentSymbol,
+    name: currentSymbol,
+    source: 'pool',
+    notes: c.reason || '',
+  }));
+  const livePayload = encodeLivePayload(buildLivePayload({
+    symbol: currentSymbol,
+    contract: c.name || '',
+    option_type: c.type || 'CALL',
+    expiry: c.expiry || '',
+    strike: c.strike,
+    dte: c.dte,
+    iv_pct: c.iv_pct,
+    risk_reward: c.score,
+    entry: c.ask != null ? c.ask : c.last,
+    ask: c.ask,
+    last: c.last,
+    bid: c.bid,
+    qty: 1,
+    reason: c.reason || '',
+  }, {
+    symbol: currentSymbol,
+    name: currentSymbol,
+    source: 'pool',
+    notes: c.reason || '',
+  }));
+  return `
+  <div class="contract-card" onclick="selectCard(this)">
+    <div class="card-top">
+      <span class="card-num">#${n}</span>
+      <span class="card-type ${typeClass}">${c.type}</span>
+    </div>
+    <div class="card-name">${c.name||'—'}</div>
+    <div class="card-meta">${c.expiry||''}  Strike ${c.strike||'—'}  DTE ${c.dte||'—'}</div>
+    <div class="card-price">
+      <span class="card-bidask">${fmt(c.bid)} / ${fmt(c.ask)}</span>
+      <span class="card-spread">spread ${c.spread_pct!=null?c.spread_pct+'%':'—'}</span>
+    </div>
+    <div class="card-stats">
+      <div class="card-stat">
+        <span class="card-stat-label">Vol</span>
+        <span class="card-stat-value">${fmtK(c.volume)}</span>
+      </div>
+      <div class="card-stat">
+        <span class="card-stat-label">OI</span>
+        <span class="card-stat-value">${fmtK(c.oi)}</span>
+      </div>
+      <div class="card-stat">
+        <span class="card-stat-label">IV</span>
+        <span class="card-iv">${fmtPct(c.iv_pct)}</span>
+      </div>
+    </div>
+    <div class="card-greeks">
+      <div class="greek-item"><span class="greek-label">Δ</span><span class="greek-val">${fmt(c.delta,3)}</span></div>
+      <div class="greek-item"><span class="greek-label">Γ</span><span class="greek-val">${fmt(c.gamma,4)}</span></div>
+      <div class="greek-item"><span class="greek-label">Θ</span><span class="greek-val">${fmt(c.theta,4)}</span></div>
+      <div class="greek-item"><span class="greek-label">V</span><span class="greek-val">${fmt(c.vega,3)}</span></div>
+    </div>
+    <div class="card-actions">
+      <button class="sim-mini-btn" onclick="event.stopPropagation(); buySimFromEncoded('${simPayload}')">模拟买入</button>
+      <button class="trade-live-btn" onclick="event.stopPropagation(); buyLiveFromEncoded('${livePayload}')">实盘买入</button>
+    </div>
+  </div>`;
+}
+
+function fmtK(v){ if(v==null) return '—'; return v>=1000?(v/1000).toFixed(1)+'K':String(v) }
+function selectCard(el){
+  document.querySelectorAll('.contract-card').forEach(e=>e.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+// ── 图表 ────────────────────────────────────────────────────
+function drawKChart(daily, symbol){
+  const canvas = $('chart-k');
+  const wrap   = canvas.parentElement;
+  canvas.width  = wrap.clientWidth  || 400;
+  canvas.height = wrap.clientHeight || 180;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(!daily.length) return;
+
+  const prices = daily.map(d=>d.c);
+  const minP = Math.min(...prices), maxP = Math.max(...prices);
+  const pad = { l:8, r:8, t:8, b:20 };
+  const W = canvas.width - pad.l - pad.r;
+  const H = canvas.height - pad.t - pad.b;
+  const pRange = maxP-minP||1;
+
+  const xPos = i => pad.l + (i/(prices.length-1))*W;
+  const yPos = v => pad.t + H - ((v-minP)/pRange)*H;
+
+  // 渐变填充
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t+H);
+  grad.addColorStop(0, 'rgba(77,163,255,0.25)');
+  grad.addColorStop(1, 'rgba(77,163,255,0.0)');
+
+  ctx.beginPath();
+  ctx.moveTo(xPos(0), yPos(prices[0]));
+  prices.forEach((p,i)=>{ if(i>0) ctx.lineTo(xPos(i),yPos(p)) });
+  ctx.lineTo(xPos(prices.length-1), pad.t+H);
+  ctx.lineTo(xPos(0), pad.t+H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(xPos(0), yPos(prices[0]));
+  prices.forEach((p,i)=>{ if(i>0) ctx.lineTo(xPos(i),yPos(p)) });
+  ctx.strokeStyle = '#4da3ff'; ctx.lineWidth=1.5; ctx.stroke();
+
+  // 首尾标注
+  drawLabel(ctx, xPos(0), yPos(prices[0]), daily[0].t, pad);
+  drawLabel(ctx, xPos(prices.length-1), yPos(prices[prices.length-1]), daily[daily.length-1].t, pad);
+  $('chart-k-label').textContent = `${symbol}  Close $${fmt(prices[prices.length-1])}`;
+}
+
+function drawIntraChart(intraday, symbol){
+  const canvas = $('chart-intra');
+  const wrap   = canvas.parentElement;
+  canvas.width  = wrap.clientWidth  || 400;
+  canvas.height = wrap.clientHeight || 180;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(!intraday.length) return;
+
+  const prices = intraday.map(d=>d.c);
+  const vwaps  = intraday.map(d=>d.vwap);
+  const all = [...prices, ...vwaps.filter(v=>v!=null)];
+  const minP = Math.min(...all), maxP = Math.max(...all);
+  const pad = { l:8, r:8, t:8, b:20 };
+  const W = canvas.width - pad.l - pad.r;
+  const H = canvas.height - pad.t - pad.b;
+  const pRange = maxP-minP||1;
+
+  const xPos = i => pad.l + (i/(prices.length-1||1))*W;
+  const yPos = v => pad.t + H - ((v-minP)/pRange)*H;
+
+  // 价格线填充
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t+H);
+  grad.addColorStop(0, 'rgba(77,163,255,0.2)');
+  grad.addColorStop(1, 'rgba(77,163,255,0.0)');
+
+  ctx.beginPath();
+  ctx.moveTo(xPos(0), yPos(prices[0]));
+  prices.forEach((p,i)=>{ if(i>0) ctx.lineTo(xPos(i),yPos(p)) });
+  ctx.lineTo(xPos(prices.length-1), pad.t+H);
+  ctx.lineTo(xPos(0), pad.t+H);
+  ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(xPos(0), yPos(prices[0]));
+  prices.forEach((p,i)=>{ if(i>0) ctx.lineTo(xPos(i),yPos(p)) });
+  ctx.strokeStyle='#4da3ff'; ctx.lineWidth=1.5; ctx.stroke();
+
+  // VWAP 虚线
+  const vwapFiltered = vwaps.filter(v=>v!=null);
+  if(vwapFiltered.length){
+    ctx.beginPath();
+    ctx.setLineDash([4,3]);
+    let started=false;
+    vwaps.forEach((v,i)=>{ if(v==null) return; if(!started){ctx.moveTo(xPos(i),yPos(v));started=true;} else ctx.lineTo(xPos(i),yPos(v)); });
+    ctx.strokeStyle='rgba(255,215,0,0.7)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // X轴标注
+  const first = intraday[0], last = intraday[intraday.length-1];
+  drawLabel(ctx, xPos(0), pad.t+H-2, first.t, pad);
+  drawLabel(ctx, xPos(prices.length-1), pad.t+H-2, last.t, pad);
+  $('chart-intra-label').textContent = `VWAP $${fmt(vwapFiltered[vwapFiltered.length-1]||0)}`;
+}
+
+function drawLabel(ctx, x, y, text, pad){
+  ctx.font = '9px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(106,138,106,0.9)';
+  ctx.fillText(text, Math.max(pad.l, Math.min(x-20, ctx.canvas.width-60)), ctx.canvas.height-4);
+}
+
+// ── 历史记录 ────────────────────────────────────────────────
+function addHistory(text){
+  scanHistory.unshift(text);
+  if(scanHistory.length>6) scanHistory.pop();
+  const list = $('history-list');
+  list.innerHTML = scanHistory.map(t=>`<div class="history-item" onclick="setCmd(this)">${t}</div>`).join('');
+  list.querySelectorAll('.history-item').forEach(el=>el.onclick=()=>setCmd(el));
+}
+
+// ── 键盘快捷键 ──────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey) && e.key==='Enter') doScan();
+});
+
+// ── 窗口 resize 重绘 ────────────────────────────────────────
+window.addEventListener('resize',()=>{
+  // 简单重绘空画布
+  [$('chart-k'),$('chart-intra')].forEach(c=>{
+    if(c){ const w=c.parentElement; c.width=w.clientWidth; c.height=w.clientHeight; }
+  });
+});
+</script>
+</body>
+</html>
+
+
+
