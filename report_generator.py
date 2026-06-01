@@ -138,59 +138,109 @@ def build_premarket_report(
     user_bias: dict | None = None,
     market_context: dict | None = None,
     unusual_rows: list[dict] | None = None,
+    focus_profile: dict | None = None,
+    distillate: dict | None = None,
 ) -> str:
     user_bias = user_bias or {}
     market_context = market_context or {}
     unusual_rows = unusual_rows or []
+    focus_profile = focus_profile or {}
+    distillate = distillate or {}
 
-    lines = [
-        "## 盘前预测报告",
-        f"**时段**：{session_label}",
-        f"**时间**：{timestamp}",
-        "",
-        "### 当日策略偏向",
-        (
-            f"> 方向：{_fmt(user_bias.get('direction', 'neutral'))} | "
-            f"DTE：{_fmt(user_bias.get('dte_style', 'mixed'))} | "
-            f"IV：{_fmt(user_bias.get('iv_style', 'balanced'))} | "
-            f"结构：{_fmt(user_bias.get('structure', 'both'))}"
-        ),
-        "",
-        "### 市场概览",
-        f"> 板块：{_fmt(market_context.get('sector_line'), '暂无')}",
-        f"> 新闻：{_fmt(market_context.get('news_line'), '暂无')}",
-        f"> 资金：{_fmt(market_context.get('flow_line'), '暂无')}",
-        "",
-        "### 今日优先候选",
+    focus_symbols = [str(symbol) for symbol in (focus_profile.get("focus_symbols") or []) if str(symbol)]
+    focus_summary = list(focus_profile.get("summary") or [])
+    focus_cluster_lines = [
+        f"{item.get('cluster')} x{item.get('count')}"
+        for item in (focus_profile.get("top_clusters") or [])[:3]
+        if item.get("cluster")
+    ]
+    distillate_essence = [str(item) for item in (distillate.get("essence") or []) if str(item)]
+    distillate_playbook = [str(item) for item in (distillate.get("playbook") or []) if str(item)]
+    distillate_avoid = [str(item) for item in (distillate.get("avoid") or []) if str(item)]
+    distillate_focus = [
+        str(item.get("symbol"))
+        for item in (distillate.get("focus_symbols") or [])
+        if isinstance(item, dict) and item.get("symbol")
+    ]
+    distillate_pending = [
+        f"{str(item.get('symbol') or '').upper()} {str(item.get('type') or '').upper()}".strip()
+        for item in (distillate.get("pending_signals") or [])[:4]
+        if isinstance(item, dict) and item.get("symbol")
     ]
 
+    lines = [
+        "## ??????",
+        f"**??**?{session_label}",
+        f"**??**?{timestamp}",
+        "",
+        "### ??????",
+        (
+            f"> ???{_fmt(user_bias.get('direction', 'neutral'))} | "
+            f"DTE?{_fmt(user_bias.get('dte_style', 'mixed'))} | "
+            f"IV?{_fmt(user_bias.get('iv_style', 'balanced'))} | "
+            f"???{_fmt(user_bias.get('structure', 'both'))}"
+        ),
+        "",
+        "### ????",
+        f"> ???{_fmt(market_context.get('sector_line'), '??')}",
+        f"> ???{_fmt(market_context.get('news_line'), '??')}",
+        f"> ???{_fmt(market_context.get('flow_line'), '??')}",
+    ]
+
+    if focus_symbols or focus_summary or focus_cluster_lines:
+        lines.extend(["", "### ?????"])
+        for item in focus_summary[:3]:
+            lines.append(f"> {item}")
+        if focus_symbols:
+            lines.append(f"> ?????{', '.join(focus_symbols[:8])}")
+        if focus_cluster_lines:
+            lines.append(f"> ?????{' / '.join(focus_cluster_lines)}")
+
+    if distillate_essence or distillate_playbook or distillate_avoid or distillate_focus or distillate_pending:
+        lines.extend(["", "### ??????"])
+        for item in distillate_essence[:3]:
+            lines.append(f"> ?? {item}")
+        for item in distillate_playbook[:3]:
+            lines.append(f"> ?? {item}")
+        for item in distillate_avoid[:2]:
+            lines.append(f"> ?? {item}")
+        if distillate_focus:
+            lines.append(f"> ?????{', '.join(distillate_focus[:8])}")
+        if distillate_pending:
+            lines.append(f"> ?????{', '.join(distillate_pending[:4])}")
+
+    lines.extend(["", "### ??????"])
+
     if not recommendations:
-        lines.append("> 暂无有效候选。")
+        lines.append("> ???????")
     for idx, rec in enumerate(recommendations, start=1):
+        focus_marker = ""
+        if str(rec.get("symbol") or "") in focus_symbols:
+            focus_marker = " [???]"
         lines.extend(
             [
-                f"{idx}. **{_fmt(rec.get('symbol'), '?')}** `{_fmt(rec.get('contract'), '')}` | {_fmt(rec.get('type'))} | Score {_fmt(rec.get('score'))}",
-                f"   - 入场 {_fmt(rec.get('entry'))} / 止损 {_fmt(rec.get('stop_loss'))} / 止盈 {_fmt(rec.get('take_profit'))}",
-                f"   - 触发 {_fmt(rec.get('trigger'))} / 失效 {_fmt(rec.get('invalidation'))}",
-                f"   - 板块 {_fmt(rec.get('sector'), 'N/A')} | 原因 {_fmt(rec.get('reason'), 'N/A')}",
-                f"   - 新闻 {_fmt(rec.get('news_summary'), '暂无明显新闻驱动')}",
+                f"{idx}. **{_fmt(rec.get('symbol'), '?')}{focus_marker}** `{_fmt(rec.get('contract'), '')}` | {_fmt(rec.get('type'))} | Score {_fmt(rec.get('score'))}",
+                f"   - ?? {_fmt(rec.get('entry'))} / ?? {_fmt(rec.get('stop_loss'))} / ?? {_fmt(rec.get('take_profit'))}",
+                f"   - ?? {_fmt(rec.get('trigger'))} / ?? {_fmt(rec.get('invalidation'))}",
+                f"   - ?? {_fmt(rec.get('sector'), 'N/A')} | ?? {_fmt(rec.get('reason'), 'N/A')}",
+                f"   - ?? {_fmt(rec.get('news_summary'), '????????')}",
             ]
         )
 
     if unusual_rows:
-        lines.extend(["", "### 异常期权关注"])
+        lines.extend(["", "### ??????"])
         for idx, row in enumerate(unusual_rows[:8], start=1):
             plan = row.get("best_plan", {}) if isinstance(row.get("best_plan"), dict) else {}
             contract = plan.get("contract") or row.get("contract", {}).get("name") or ""
             lines.extend(
                 [
-                    f"{idx}. **{_fmt(row.get('symbol'), '?')} {contract}** | 分数 {_fmt(row.get('final_score'))}",
-                    f"   - Vol/OI {_fmt(row.get('vol_oi_ratio'))}x | 权利金 {_fmt_money(row.get('premium'))} | IV {_fmt(row.get('iv_pct'))}%",
-                    f"   - 入场 {_fmt(plan.get('entry'))} / 止损 {_fmt(plan.get('stop_loss'))} / 止盈 {_fmt(plan.get('take_profit'))}",
+                    f"{idx}. **{_fmt(row.get('symbol'), '?')} {contract}** | ?? {_fmt(row.get('final_score'))}",
+                    f"   - Vol/OI {_fmt(row.get('vol_oi_ratio'))}x | ??? {_fmt_money(row.get('premium'))} | IV {_fmt(row.get('iv_pct'))}%",
+                    f"   - ?? {_fmt(plan.get('entry'))} / ?? {_fmt(plan.get('stop_loss'))} / ?? {_fmt(plan.get('take_profit'))}",
                 ]
             )
 
-    lines.extend(["", "_盘前报告强调方向、入场、失效和异常期权流。执行只做流动性更好的合约。_"])
+    lines.extend(["", "_??????????????????????????????????_"])
     return "\n".join(lines)
 
 
@@ -201,22 +251,37 @@ def build_postmarket_review_report(
     sim_summary: dict | None = None,
     resolved_signals: list[dict] | None = None,
     next_watchlist: list[dict] | None = None,
+    focus_profile: dict | None = None,
+    distillate: dict | None = None,
 ) -> str:
     learning_profile = learning_profile or {}
     sim_summary = sim_summary or {}
     resolved_signals = resolved_signals or []
     next_watchlist = next_watchlist or []
+    focus_profile = focus_profile or {}
+    distillate = distillate or {}
+
+    focus_symbols = [str(symbol) for symbol in (focus_profile.get("focus_symbols") or []) if str(symbol)]
+    focus_summary = list(focus_profile.get("summary") or [])
+    distillate_essence = [str(item) for item in (distillate.get("essence") or []) if str(item)]
+    distillate_playbook = [str(item) for item in (distillate.get("playbook") or []) if str(item)]
+    distillate_avoid = [str(item) for item in (distillate.get("avoid") or []) if str(item)]
+    distillate_pending_forecasts = [
+        f"{str(item.get('symbol') or '').upper()} {item.get('direction') or ''}".strip()
+        for item in (distillate.get("pending_forecasts") or [])[:4]
+        if isinstance(item, dict) and item.get("symbol")
+    ]
 
     lines = [
-        "## 盘后复盘报告",
-        f"**时段**：{session_label}",
-        f"**时间**：{timestamp}",
+        "## ??????",
+        f"**??**?{session_label}",
+        f"**??**?{timestamp}",
         "",
-        "### 当日复盘总览",
-        f"> 学习结论：{_fmt(learning_profile.get('summary'), '暂无')}",
-        f"> 真实平仓样本：{_fmt(learning_profile.get('closed_count'), 0)} | 自主跟踪信号：{_fmt(learning_profile.get('resolved_signal_count'), 0)} | 置信度：{_fmt(learning_profile.get('confidence'), 0)}",
+        "### ??????",
+        f"> ?????{_fmt(learning_profile.get('summary'), '??')}",
+        f"> ???????{_fmt(learning_profile.get('closed_count'), 0)} | ???????{_fmt(learning_profile.get('resolved_signal_count'), 0)} | ????{_fmt(learning_profile.get('confidence'), 0)}",
         "",
-        "### 模拟/跟踪表现",
+        "### ??/????",
         (
             f"> Open {_fmt(sim_summary.get('open_count'), 0)} | Closed {_fmt(sim_summary.get('closed_count'), 0)} | "
             f"Realized {_fmt(sim_summary.get('realized_pnl'), 0)} | Unrealized {_fmt(sim_summary.get('open_unrealized_pnl'), 0)} | "
@@ -224,32 +289,51 @@ def build_postmarket_review_report(
         ),
     ]
 
+    if focus_symbols or focus_summary:
+        lines.extend(["", "### ?????"])
+        for item in focus_summary[:2]:
+            lines.append(f"> {item}")
+        if focus_symbols:
+            lines.append(f"> ?????{', '.join(focus_symbols[:8])}")
+
+    if distillate_essence or distillate_playbook or distillate_avoid or distillate_pending_forecasts:
+        lines.extend(["", "### ??????"])
+        for item in distillate_essence[:3]:
+            lines.append(f"> ?? {item}")
+        for item in distillate_playbook[:3]:
+            lines.append(f"> ?? {item}")
+        for item in distillate_avoid[:2]:
+            lines.append(f"> ?? {item}")
+        if distillate_pending_forecasts:
+            lines.append(f"> ?????{', '.join(distillate_pending_forecasts[:4])}")
+
     if resolved_signals:
-        lines.extend(["", "### 当日已验证信号"])
+        lines.extend(["", "### ???????"])
         for idx, item in enumerate(resolved_signals[:10], start=1):
-            outcome = "命中" if item.get("success") else "失效"
+            outcome = "??" if item.get("success") else "??"
             lines.extend(
                 [
                     f"{idx}. **{_fmt(item.get('symbol'), '?')} {_fmt(item.get('type'))} {outcome}**",
-                    f"   - 标的变化 {_fmt(item.get('underlying_return_pct'))}% | 方向收益 {_fmt(item.get('directional_edge_pct'))}%",
-                    f"   - 因子 IV-HV {_fmt(item.get('factor_bucket_ivrv'))} | Skew {_fmt(item.get('factor_bucket_skew'))} | Flow {_fmt(item.get('factor_bucket_flow'))} | Liquidity {_fmt(item.get('factor_bucket_liquidity'))}",
+                    f"   - ???? {_fmt(item.get('underlying_return_pct'))}% | ???? {_fmt(item.get('directional_edge_pct'))}%",
+                    f"   - ?? IV-HV {_fmt(item.get('factor_bucket_ivrv'))} | Skew {_fmt(item.get('factor_bucket_skew'))} | Flow {_fmt(item.get('factor_bucket_flow'))} | Liquidity {_fmt(item.get('factor_bucket_liquidity'))}",
                 ]
             )
     else:
-        lines.extend(["", "### 当日已验证信号", "> 今日暂无成熟样本完成验证。"])
+        lines.extend(["", "### ???????", "> ?????????????"])
 
     if next_watchlist:
-        lines.extend(["", "### 次日跟踪名单"])
+        lines.extend(["", "### ??????"])
         for idx, rec in enumerate(next_watchlist[:5], start=1):
+            focus_marker = " [???]" if str(rec.get("symbol") or "") in focus_symbols else ""
             lines.extend(
                 [
-                    f"{idx}. **{_fmt(rec.get('symbol'), '?')}** `{_fmt(rec.get('contract'), '')}` | {_fmt(rec.get('type'))} | Score {_fmt(rec.get('score'))}",
-                    f"   - 触发 {_fmt(rec.get('trigger'))} / 失效 {_fmt(rec.get('invalidation'))}",
-                    f"   - 原因 {_fmt(rec.get('reason'), 'N/A')}",
+                    f"{idx}. **{_fmt(rec.get('symbol'), '?')}{focus_marker}** `{_fmt(rec.get('contract'), '')}` | {_fmt(rec.get('type'))} | Score {_fmt(rec.get('score'))}",
+                    f"   - ?? {_fmt(rec.get('trigger'))} / ?? {_fmt(rec.get('invalidation'))}",
+                    f"   - ?? {_fmt(rec.get('reason'), 'N/A')}",
                 ]
             )
 
-    lines.extend(["", "_盘后复盘强调：哪些信号兑现、哪些因子有效、下一交易日继续盯谁。_"])
+    lines.extend(["", "_??????????????????????????????_"])
     return "\n".join(lines)
 
 

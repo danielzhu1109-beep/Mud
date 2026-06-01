@@ -635,6 +635,33 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:var(-
   font-size:11px;
   line-height:1.5;
 }
+.learning-distillate-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:6px;
+  margin-top:8px;
+}
+.learning-distillate-card{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:8px 10px;
+}
+.learning-distillate-title{
+  font-size:8px;
+  color:var(--text3);
+  font-family:var(--mono);
+  letter-spacing:1px;
+  text-transform:uppercase;
+}
+.learning-distillate-body{
+  margin-top:5px;
+  font-size:11px;
+  color:var(--text1);
+  line-height:1.55;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
 
 /* 经验库 */
 .library-tools{display:flex;gap:6px;margin-top:6px;align-items:center}
@@ -1445,7 +1472,15 @@ canvas{display:block;width:100%!important;height:100%!important}
           <div class="sim-sub" id="sim-sub">未开仓</div>
         </div>
         <div class="sim-toolbar">
-          <button class="sim-btn" onclick="refreshSimPortfolio()">刷新持仓</button>
+          <button class="sim-btn" onclick="refreshSimPortfolio(true)">刷新持仓</button>
+          <button class="sim-btn" onclick="closeManualSimPositions()">一键平仓全部仓位</button>
+          <label class="toggle" title="自动模拟交易">
+            <input type="checkbox" id="sim-auto-toggle" onchange="toggleSimAuto(this.checked)">
+            <div class="toggle-bg"></div>
+            <div class="toggle-knob"></div>
+          </label>
+          <button class="sim-btn" onclick="runSimAutoNow()">立即执行</button>
+          <div class="sim-sub" id="sim-auto-sub">自动模拟读取中</div>
         </div>
       </div>
       <div class="sim-summary" id="sim-summary">
@@ -1486,6 +1521,24 @@ canvas{display:block;width:100%!important;height:100%!important}
           <div class="learning-item"><div class="learning-item-label">RR 偏好</div><div class="learning-item-value" id="learning-rr">—</div></div>
         </div>
         <div class="learning-summary" id="learning-summary">系统会基于你的模拟仓结果和经验图谱，自动微调筛选和评分。</div>
+        <div class="learning-distillate-grid">
+          <div class="learning-distillate-card">
+            <div class="learning-distillate-title">策略蒸馏</div>
+            <div class="learning-distillate-body" id="learning-distillate-essence">等待蒸馏结果</div>
+          </div>
+          <div class="learning-distillate-card">
+            <div class="learning-distillate-title">执行手册</div>
+            <div class="learning-distillate-body" id="learning-distillate-playbook">等待蒸馏结果</div>
+          </div>
+          <div class="learning-distillate-card">
+            <div class="learning-distillate-title">规避项</div>
+            <div class="learning-distillate-body" id="learning-distillate-avoid">等待蒸馏结果</div>
+          </div>
+          <div class="learning-distillate-card">
+            <div class="learning-distillate-title">关注池 / 待验证</div>
+            <div class="learning-distillate-body" id="learning-distillate-focus">等待蒸馏结果</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1664,6 +1717,7 @@ let scanHistory = [];
 let pendingWebullPayload = null;
 let latestWebullState = null;
 let latestSimPortfolio = null;
+let latestSimAuto = null;
 let sectionToggleState = {};
 let selectedTop50Row = null;
 let selectedUnusualRow = null;
@@ -2673,7 +2727,7 @@ async function uploadLibraryFiles(files){
 
 async function runTop50(refresh=false){
   $('top50-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">筛选中...</td></tr>';
-  $('universe-meta').textContent = refresh ? '刷新中...' : '分析中...';
+  $('universe-meta').textContent = refresh ? `刷新中... | ${SCAN_REFRESH_INTERVAL_MINUTES}m` : `分析中... | ${SCAN_REFRESH_INTERVAL_MINUTES}m`;
   try{
     const res = await fetch(`${API}/api/universe/top50`, {
       method:'POST',
@@ -2700,7 +2754,7 @@ async function runTop50(refresh=false){
 function renderTop50(data){
   const rows = data.rows || [];
   window.__top50Rows = rows;
-  $('universe-meta').textContent = `${data.returned || rows.length} / ${data.analyzed_size || 0} | ${data.universe_size || 0} universe`;
+  $('universe-meta').textContent = formatScanMeta(data, rows, `${data.universe_size || 0} universe`);
   if(!rows.length){
     $('top50-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">没有可用结果</td></tr>';
     $('top50-focus-main').textContent = '没有可用结果';
@@ -2847,7 +2901,7 @@ async function buySimFromTop50(){
 
 async function runUnusual(refresh=false){
   $('unusual-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">异常扫描中...</td></tr>';
-  $('unusual-meta').textContent = refresh ? '刷新中...' : '扫描中...';
+  $('unusual-meta').textContent = refresh ? `刷新中... | ${SCAN_REFRESH_INTERVAL_MINUTES}m` : `扫描中... | ${SCAN_REFRESH_INTERVAL_MINUTES}m`;
   try{
     const res = await fetch(`${API}/api/unusual/daily`, {
       method:'POST',
@@ -2881,8 +2935,7 @@ async function runUnusual(refresh=false){
 function renderUnusual(data){
   const rows = data.rows || [];
   window.__unusualRows = rows;
-  const cacheText = data.cached ? 'cache' : 'live';
-  $('unusual-meta').textContent = `${data.returned || rows.length} / ${data.prefiltered_size || 0} | ${cacheText}`;
+  $('unusual-meta').textContent = formatScanMeta(data, rows, `${data.prefiltered_size || 0} prefiltered`);
   if(!rows.length){
     $('unusual-body').innerHTML = '<tr><td colspan="7" style="color:var(--text3);padding:10px">没有发现符合阈值的异常期权</td></tr>';
     $('unusual-focus-main').textContent = '没有可用结果';
@@ -2992,7 +3045,7 @@ async function closeSimTrade(id){
     const res = await fetch(`${API}/api/sim/close`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id})
+      body: JSON.stringify({id, reason: 'manual_single', note: '单笔手动平仓'})
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
@@ -3003,10 +3056,87 @@ async function closeSimTrade(id){
   }
 }
 
+async function closeManualSimPositions(){
+  try{
+    fetch(`${API}/api/sim/close-all`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({scope: 'all', reason: 'bulk_exit_all', note: '一键平仓全部仓位'})
+    }).catch(() => {});
+    toast('一键平仓已提交');
+    setTimeout(() => {
+      refreshSimAuto();
+    }, 1800);
+  }catch(e){
+    toast(`一键平仓失败: ${e.message}`);
+  }
+}
+
+function renderSimAuto(auto = {}){
+  latestSimAuto = auto || null;
+  const enabled = !!auto.enabled;
+  const lastCycle = auto.last_cycle_at || auto.updated_at || '';
+  const lastAction = auto.last_action || '等待执行';
+  const summary = enabled ? '自动模拟运行中（仅盘中）' : '自动模拟已暂停';
+  $('sim-auto-toggle').checked = enabled;
+  const candidate = auto.last_candidate_summary || {};
+  const breakdown = candidate.score_breakdown || {};
+  const reasons = Array.isArray(breakdown.distillate_reasons) && breakdown.distillate_reasons.length
+    ? ` | 蒸馏 ${breakdown.distillate_reasons.slice(0, 3).join(', ')}`
+    : '';
+  const candidateText = candidate.symbol
+    ? ` | 最近候选 ${candidate.symbol} ${candidate.contract || ''} @ ${candidate.score ?? '—'}${reasons}`
+    : '';
+  $('sim-auto-sub').textContent = `${summary}${lastCycle ? ` | ${lastCycle}` : ''}${lastAction ? ` | ${lastAction}` : ''}${candidateText}`;
+}
+
+async function refreshSimAuto(){
+  try{
+    const res = await fetch(`${API}/api/sim/auto`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderSimAuto(data.auto || {});
+  }catch(e){
+    $('sim-auto-sub').textContent = `自动模拟加载失败：${e.message}`;
+  }
+}
+
+async function toggleSimAuto(enabled){
+  try{
+    const res = await fetch(`${API}/api/sim/auto`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled})
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderSimAuto(data.auto || {});
+    toast(enabled ? '自动模拟已开启' : '自动模拟已关闭');
+  }catch(e){
+    toast(`自动模拟设置失败: ${e.message}`);
+    await refreshSimAuto();
+  }
+}
+
+async function runSimAutoNow(){
+  try{
+    const res = await fetch(`${API}/api/sim/auto/run`, { method:'POST' });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    await refreshSimPortfolio();
+    await refreshSimAuto();
+    toast(data.skipped ? `自动模拟未执行：${data.skipped}` : '自动模拟已执行');
+  }catch(e){
+    toast(`自动模拟执行失败: ${e.message}`);
+  }
+}
+
 function renderSimPortfolio(data){
   latestSimPortfolio = data || null;
   const summary = data.summary || {};
   renderLearningProfile(data.learning || {});
+  if(data.strategy_distillate) renderDistillate(data.strategy_distillate);
+  if(data.auto) renderSimAuto(data.auto);
   $('sim-sub').textContent = data.updated_at ? `更新于 ${data.updated_at}` : '未开仓';
   $('sim-open-count').textContent = summary.open_count ?? 0;
   $('sim-open-pnl').textContent = fmt(summary.open_unrealized_pnl, 2);
@@ -3050,15 +3180,20 @@ function renderSimPortfolio(data){
   if(!closed.length){
     $('sim-history').textContent = '系统会自动保存每次开仓和平仓，以及持仓期间的价格轨迹。';
   }else{
-    const lines = latest.map(t => `${t.symbol} ${t.contract} | ${t.status} | ${fmt(t.realized_pnl,2)} | ${t.closed_at || ''}`);
-    $('sim-history').textContent = `最近平仓：\n${lines.join('\n')}\n\n总计：开仓 ${summary.open_count || 0}，平仓 ${summary.closed_count || 0}，胜率 ${fmt(summary.win_rate,2)}%`;
+    const lines = latest.map(t => {
+      const pnl = `${fmt(t.realized_pnl,2)} / ${fmt(t.realized_pnl_pct,2)}%`;
+      const reason = t.close_analysis || t.close_note || t.close_reason || '—';
+      const next = t.next_action || '—';
+      return `${t.symbol} ${t.contract} | ${pnl} | ${t.closed_at || ''}\n原因：${reason}\n下一步：${next}`;
+    });
+    $('sim-history').textContent = `最近平仓：\n${lines.join('\n\n')}\n\n总计：开仓 ${summary.open_count || 0}，平仓 ${summary.closed_count || 0}，胜率 ${fmt(summary.win_rate,2)}%`;
   }
   updateTradeCompare();
 }
 
-async function refreshSimPortfolio(){
+async function refreshSimPortfolio(force=false){
   try{
-    const res = await fetch(`${API}/api/sim/portfolio`);
+    const res = await fetch(`${API}/api/sim/portfolio${force ? '?refresh=1' : ''}`);
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     renderSimPortfolio(data);
@@ -3092,9 +3227,153 @@ function formatLearningPref(value, map = {}){
   return map[key] || value || '—';
 }
 
+function summarizeDistillateList(items, emptyText = '—'){
+  if(!Array.isArray(items) || !items.length) return emptyText;
+  return items.filter(Boolean).slice(0, 3).join('\n');
+}
+
+const SCAN_REFRESH_INTERVAL_MINUTES = 15;
+const SCAN_REFRESH_INTERVAL_MS = SCAN_REFRESH_INTERVAL_MINUTES * 60 * 1000;
+let scanRefreshTimer = null;
+let scanRefreshClockTimer = null;
+let scanRefreshInFlight = false;
+let scanRefreshLastAt = 0;
+let latestDistillate = null;
+
+function formatScanMeta(data, rows, extra = ''){
+  const ts = data?.timestamp || data?.fetched_at || '';
+  const source = data?.cached ? 'cache' : 'live';
+  const base = `${data?.returned || rows.length || 0} / ${data?.analyzed_size || data?.prefiltered_size || 0}`;
+  const timePart = ts ? `更新于 ${ts}` : '未刷新';
+  return [base, timePart, source, extra].filter(Boolean).join(' | ');
+}
+
+function getNySessionClock(now = new Date()){
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(now);
+  const get = (type) => parts.find(part => part.type === type)?.value || '';
+  return {
+    weekday: get('weekday'),
+    hour: parseInt(get('hour') || '0', 10),
+    minute: parseInt(get('minute') || '0', 10),
+    second: parseInt(get('second') || '0', 10),
+  };
+}
+
+function isScanWindowOpen(now = new Date()){
+  const clock = getNySessionClock(now);
+  if(['Sat', 'Sun'].includes(clock.weekday)) return false;
+  const minutes = clock.hour * 60 + clock.minute;
+  return minutes >= (4 * 60 + 30) && minutes <= (16 * 60 + 30);
+}
+
+function formatNyNow(now = new Date()){
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: '2-digit',
+    day: '2-digit',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(now);
+}
+
+function updateScanBannerStatus(){
+  const open = isScanWindowOpen();
+  const elapsedMins = scanRefreshLastAt ? Math.floor((Date.now() - scanRefreshLastAt) / 60000) : null;
+  const nextIn = open && elapsedMins != null ? Math.max(0, SCAN_REFRESH_INTERVAL_MINUTES - (elapsedMins % SCAN_REFRESH_INTERVAL_MINUTES)) : null;
+  const lastText = scanRefreshLastAt ? `上次 ${formatNyNow(new Date(scanRefreshLastAt))}` : '尚未刷新';
+  const statusText = open
+    ? `盘中动态 | ${SCAN_REFRESH_INTERVAL_MINUTES}m | ${lastText}${nextIn != null ? ` | 下次约 ${nextIn}m` : ''}`
+    : `盘中暂停 | ${lastText}`;
+  $('topbar-task').textContent = statusText;
+  const statTask = $('stat-task');
+  if(statTask) statTask.textContent = open ? 'running' : 'paused';
+}
+
+async function refreshScanCycle(force = false){
+  if(scanRefreshInFlight) return;
+  if(!force && !isScanWindowOpen()) return;
+  scanRefreshInFlight = true;
+  try{
+    await Promise.all([
+      runTop50(force),
+      runUnusual(force),
+    ]);
+    scanRefreshLastAt = Date.now();
+    updateScanBannerStatus();
+  }finally{
+    scanRefreshInFlight = false;
+  }
+}
+
+function superviseScanCycle(){
+  updateScanBannerStatus();
+  if(!isScanWindowOpen()) return;
+  if(!scanRefreshLastAt || (Date.now() - scanRefreshLastAt) >= SCAN_REFRESH_INTERVAL_MS){
+    refreshScanCycle(true);
+  }
+}
+
+function renderDistillate(distillate = {}){
+  latestDistillate = distillate || {};
+  const essence = summarizeDistillateList(latestDistillate.essence, '等待蒸馏结果');
+  const playbook = summarizeDistillateList(latestDistillate.playbook, '等待蒸馏结果');
+  const avoid = summarizeDistillateList(latestDistillate.avoid, '暂无明确规避项');
+  const focusSymbols = Array.isArray(latestDistillate.focus_symbols)
+    ? latestDistillate.focus_symbols
+        .filter(item => item && item.symbol)
+        .slice(0, 4)
+        .map(item => `${item.symbol}${item.reason ? `: ${item.reason}` : ''}`)
+    : [];
+  const pendingSignals = Array.isArray(latestDistillate.pending_signals)
+    ? latestDistillate.pending_signals
+        .filter(item => item && item.symbol)
+        .slice(0, 3)
+        .map(item => `${item.symbol} ${item.type || ''}`.trim())
+    : [];
+  const pendingForecasts = Array.isArray(latestDistillate.pending_forecasts)
+    ? latestDistillate.pending_forecasts
+        .filter(item => item && item.symbol)
+        .slice(0, 3)
+        .map(item => `${item.symbol} ${item.direction || ''}`.trim())
+    : [];
+  $('learning-distillate-essence').textContent = essence;
+  $('learning-distillate-playbook').textContent = playbook;
+  $('learning-distillate-avoid').textContent = avoid;
+  $('learning-distillate-focus').textContent = [
+    summarizeDistillateList(focusSymbols, '暂无关注池'),
+    summarizeDistillateList([...pendingSignals, ...pendingForecasts], '暂无待验证项'),
+  ].filter(Boolean).join('\n\n');
+}
+
+async function refreshDistillate(force=false){
+  try{
+    const suffix = force ? '?refresh=1' : '';
+    const res = await fetch(`${API}/api/research/distillate${suffix}`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    renderDistillate(data);
+    if(window.__lastLearningProfile){
+      renderLearningProfile(window.__lastLearningProfile);
+    }
+  }catch(e){
+    $('learning-distillate-essence').textContent = `蒸馏加载失败：${e.message}`;
+  }
+}
+
 function renderLearningProfile(profile = {}){
+  window.__lastLearningProfile = profile || {};
   const prefs = profile.preferences || {};
-  $('learning-confidence').textContent = `置信度 ${profile.confidence != null ? fmt(profile.confidence, 2) : '--'} / 样本 ${profile.closed_count ?? 0}`;
+  const distillStamp = latestDistillate?.updated_at ? ` | 蒸馏 ${String(latestDistillate.updated_at).replace('T', ' ').slice(0, 16)}` : '';
+  $('learning-confidence').textContent = `置信度 ${profile.confidence != null ? fmt(profile.confidence, 2) : '--'} / 样本 ${profile.closed_count ?? 0}${distillStamp}`;
   $('learning-direction').textContent = formatLearningPref(prefs.direction, {
     call: '偏 CALL',
     put: '偏 PUT',
@@ -3167,15 +3446,24 @@ window.addEventListener('load', ()=>{
   refreshLongbridgeStatus();
   refreshWebullStatus();
   renderLearningProfile({});
-  setInterval(()=>{
+  renderDistillate({});
+  refreshDistillate();
+  setInterval(()=>{ 
     if(window.__webullConnected || $('webull-auto-enabled')?.checked){
       refreshWebullStatus();
     }
   }, 120000);
   refreshSimPortfolio();
+  refreshSimAuto();
   setInterval(refreshSimPortfolio, 20000);
+  setInterval(refreshSimAuto, 60000);
+  setInterval(refreshDistillate, 600000);
   refreshTopbarClock();
   setInterval(refreshTopbarClock, 1000);
+  superviseScanCycle();
+  if(scanRefreshTimer) clearInterval(scanRefreshTimer);
+  if(scanRefreshClockTimer) clearInterval(scanRefreshClockTimer);
+  scanRefreshClockTimer = setInterval(superviseScanCycle, 60000);
   const folderInput = $('library-folder-input');
   if(folderInput){
     folderInput.addEventListener('change', e => {
@@ -3252,6 +3540,8 @@ async function doScan(){
     updateStrategy(scan);
     updateTradePlans(scan.trade_plans || [], scan);
     updatePool(scan.contracts || []);
+    if(scan.learning_profile) renderLearningProfile(scan.learning_profile);
+    if(scan.strategy_distillate) renderDistillate(scan.strategy_distillate);
     if(scan.library_conclusion){
       $('stat-tag-sub').textContent = scan.library_conclusion.summary || '扫描完成';
     }

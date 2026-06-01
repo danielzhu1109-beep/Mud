@@ -215,14 +215,17 @@ def _fund_flow_score(symbol: str) -> tuple[float, str]:
 def _format_reason(row: dict, news_summary: str, sector_summary: str, flow_summary: str) -> str:
     plan = row.get("best_plan", {}) or {}
     parts = [
-        f"基础评分 {float(row.get('final_score', 0) or 0):.2f}",
-        f"风格匹配 {float(row.get('style_bonus', 0) or 0):+.2f}",
+        f"???? {float(row.get('final_score', 0) or 0):.2f}",
+        f"???? {float(row.get('style_bonus', 0) or 0):+.2f}",
         f"RR {plan.get('risk_reward', 'N/A')}",
-        f"新闻 {news_summary}",
-        f"板块 {sector_summary}",
-        f"资金 {flow_summary}",
+        f"?? {news_summary}",
+        f"?? {sector_summary}",
+        f"?? {flow_summary}",
     ]
-    return "；".join(parts)
+    focus_reason = row.get("focus_reason")
+    if focus_reason:
+        parts.append(f"??? {focus_reason}")
+    return " | ".join(parts)
 
 
 def _build_market_context(rows: list[dict]) -> dict:
@@ -238,13 +241,14 @@ def _build_market_context(rows: list[dict]) -> dict:
         if row.get("flow_summary"):
             flow_pieces.append(row["flow_summary"])
     return {
-        "sector_line": " / ".join([f"{k} x{v}" for k, v in sector_counter.most_common(3)]) if sector_counter else "无明显板块集中",
-        "news_line": "；".join(news_pieces[:2]) if news_pieces else "无明显新闻驱动",
-        "flow_line": "；".join(flow_pieces[:2]) if flow_pieces else "无明显资金集中",
+        "sector_line": " / ".join([f"{k} x{v}" for k, v in sector_counter.most_common(3)]) if sector_counter else "????????",
+        "news_line": "?".join(news_pieces[:2]) if news_pieces else "????????",
+        "flow_line": "?".join(flow_pieces[:2]) if flow_pieces else "????????",
     }
 
 
 def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
+    focus_profile = webapp._load_user_focus_profile()
     universe = webapp._analyze_marketcap_universe(
         limit=DAILY_PRESELECT_LIMIT,
         universe_size=240,
@@ -274,9 +278,12 @@ def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
             sector = row.get("sector") or "Unknown"
             news_summary = row.get("news_headline") or ""
             sector_summary = sector
-            flow_summary = f"技术偏向 {row.get('tech_bias') or 'neutral'} / IVR {row.get('iv_rank') or 'N/A'}"
-            final_score = round(base_score, 2)
+            flow_summary = f"???? {row.get('tech_bias') or 'neutral'} / IVR {row.get('iv_rank') or 'N/A'}"
+            focus_bonus, focus_tags = webapp._focus_bonus_for_symbol(symbol, cluster=sector)
+            focus_reason = focus_profile.get("symbol_reasons", {}).get(symbol)
+            final_score = round(base_score + focus_bonus, 2)
             plan = row.get("best_plan", {}) or {}
+            reason_text = row.get("reason_cn") or _format_reason(row, news_summary, sector_summary, flow_summary)
             ranked.append(
                 {
                     "symbol": symbol,
@@ -292,7 +299,10 @@ def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
                     "score": final_score,
                     "base_score": base_score,
                     "style_bonus": row.get("style_bonus", 0),
-                    "reason": row.get("reason_cn") or _format_reason(row, news_summary, sector_summary, flow_summary),
+                    "focus_bonus": focus_bonus,
+                    "focus_tags": focus_tags,
+                    "focus_reason": focus_reason,
+                    "reason": reason_text,
                     "news_summary": news_summary,
                     "sector_summary": sector_summary,
                     "flow_summary": flow_summary,
@@ -336,6 +346,8 @@ def build_premarket_prediction_report(session_label: str, use_cache: bool = True
         if cached and cached.get("report_text"):
             return cached["report_text"], cached.get("ranked", []), cached.get("bias", {}), cached.get("market_context", {})
 
+    focus_profile = webapp._load_user_focus_profile()
+    distillate = webapp._build_strategy_distillate(force_refresh=False)
     ranked, bias, market_context = _build_watchlist_snapshot()
     unusual = _load_unusual_watchlist()
     market_context["unusual_count"] = unusual.get("returned", 0)
@@ -346,6 +358,8 @@ def build_premarket_prediction_report(session_label: str, use_cache: bool = True
         user_bias=bias,
         market_context=market_context,
         unusual_rows=unusual.get("rows") or [],
+        focus_profile=focus_profile,
+        distillate=distillate,
     )
     _save_session_cache(
         session_label,
@@ -355,6 +369,8 @@ def build_premarket_prediction_report(session_label: str, use_cache: bool = True
             "ranked": ranked,
             "bias": bias,
             "market_context": market_context,
+            "focus_profile": focus_profile,
+            "distillate": distillate,
         },
     )
     return report_text, ranked, bias, market_context
@@ -373,6 +389,8 @@ def build_postmarket_review(session_label: str, use_cache: bool = True) -> tuple
         if cached and cached.get("report_text"):
             return cached["report_text"], cached.get("payload", {})
 
+    focus_profile = webapp._load_user_focus_profile()
+    distillate = webapp._build_strategy_distillate(force_refresh=False)
     ranked, _bias, _market_context = _build_watchlist_snapshot()
     learning_profile = webapp._adaptive_learning_profile()
     sim_state = webapp._refresh_sim_state(webapp._load_sim_state())
@@ -385,12 +403,16 @@ def build_postmarket_review(session_label: str, use_cache: bool = True) -> tuple
         sim_summary=sim_summary,
         resolved_signals=resolved_signals,
         next_watchlist=ranked[:5],
+        focus_profile=focus_profile,
+        distillate=distillate,
     )
     payload = {
         "learning_profile": learning_profile,
         "sim_summary": sim_summary,
         "resolved_signals": resolved_signals,
         "next_watchlist": ranked[:5],
+        "focus_profile": focus_profile,
+        "distillate": distillate,
     }
     _save_session_cache(
         session_label,
@@ -472,28 +494,28 @@ def _scheduled_job(session_label: str) -> None:
     if _is_us_market_day():
         send_session_report(session_label, use_cache=True)
     else:
-        logger.info("今日非交易日，跳过报告发送")
+        logger.info("?????????????")
 
 
 def start_scheduler() -> None:
     for t in SCHEDULE_TIMES_ET:
-        session_label = "盘前预测" if t == "08:30" else "盘后复盘"
+        session_label = "????" if t == "04:30" else "????"
         schedule.every().day.at(t).do(_scheduled_job, session_label=session_label)
-        logger.info("已注册定时任务：每天美东时间 %s (%s)", t, session_label)
-    logger.info("定时调度器已启动，监控标的：%s", ", ".join(SYMBOLS))
-    logger.info("按 Ctrl+C 退出\n")
+        logger.info("?????????????? %s (%s)", t, session_label)
+    logger.info("??????????????%s", ", ".join(SYMBOLS))
+    logger.info("? Ctrl+C ??")
     while True:
         schedule.run_pending()
         time.sleep(30)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="每日期权报告调度器")
-    parser.add_argument("--now", action="store_true", help="立即运行一次全量分析")
-    parser.add_argument("--daily", action="store_true", help="立即发送一次会话报告")
-    parser.add_argument("--symbol", type=str, default=None, help="只分析单一标的，例如 --symbol AAPL")
-    parser.add_argument("--session", type=str, default="手动", help="报告时段标签，如 盘前预测/盘后复盘")
-    parser.add_argument("--refresh", action="store_true", help="忽略会话缓存，强制重算报告")
+    parser = argparse.ArgumentParser(description="?????????")
+    parser.add_argument("--now", action="store_true", help="??????????")
+    parser.add_argument("--daily", action="store_true", help="??????????")
+    parser.add_argument("--symbol", type=str, default=None, help="?????????? --symbol AAPL")
+    parser.add_argument("--session", type=str, default="??", help="???????? ????/????")
+    parser.add_argument("--refresh", action="store_true", help="?????????????")
     args = parser.parse_args()
 
     if args.symbol:

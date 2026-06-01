@@ -1,6 +1,7 @@
 # Signal Wiki
 
 ## Recent Resolved Signals
+- AAPL: status=resolved edge=2.94% success=True source=test
 - AAPL: status=resolved edge=0.52% success=False source=scan
 - AAPL: status=resolved edge=0.52% success=False source=scan
 - AAPL: status=resolved edge=0.52% success=False source=scan
@@ -20,4 +21,3 @@
 - NFLX: status=resolved edge=-0.39% success=False source=unusual_daily
 - NVDA: status=resolved edge=-1.26% success=False source=unusual_daily
 - NVDA: status=resolved edge=-1.26% success=False source=unusual_daily
-- GOOG: status=resolved edge=-2.45% success=False source=unusual_daily

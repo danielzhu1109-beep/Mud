@@ -26,7 +26,9 @@ from scipy.stats import norm
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
+import historical_research
 from data_fetcher import get_company_profile, get_recent_news
+from wecom_notifier import send_markdown
 
 try:
     from longbridge.openapi import Config as LBConfig, Market, QuoteContext, Period, AdjustType
@@ -101,6 +103,17 @@ SIM_TRADING_DIR = Path(os.getenv("SIM_TRADING_DIR", "sim_trading"))
 SIM_TRADING_STATE = SIM_TRADING_DIR / "sim_state.json"
 LEARNING_STATE = SIM_TRADING_DIR / "learning_state.json"
 SIGNAL_MEMORY = SIM_TRADING_DIR / "signal_memory.json"
+SIM_COMMANDS_FILE = SIM_TRADING_DIR / "sim_commands.json"
+STRATEGY_DISTILLATE_FILE = SIM_TRADING_DIR / "strategy_distillate.json"
+SIM_AUTO_MAX_OPEN = max(1, int(os.getenv("SIM_AUTO_MAX_OPEN", "4")))
+SIM_AUTO_MAX_NEW_PER_CYCLE = max(1, int(os.getenv("SIM_AUTO_MAX_NEW_PER_CYCLE", "1")))
+SIM_AUTO_MAX_NEW_PER_DAY = max(1, int(os.getenv("SIM_AUTO_MAX_NEW_PER_DAY", "2")))
+SIM_AUTO_COOLDOWN_MINUTES = max(5, int(os.getenv("SIM_AUTO_COOLDOWN_MINUTES", "45")))
+SIM_AUTO_MIN_SETUP_CONFIDENCE = float(os.getenv("SIM_AUTO_MIN_SETUP_CONFIDENCE", "72"))
+SIM_AUTO_MIN_COMBINED_SCORE = float(os.getenv("SIM_AUTO_MIN_COMBINED_SCORE", "70"))
+SIM_AUTO_MIN_RR = float(os.getenv("SIM_AUTO_MIN_RR", "1.35"))
+SIM_AUTO_MAX_SPREAD_PCT = float(os.getenv("SIM_AUTO_MAX_SPREAD_PCT", "22"))
+SIM_AUTO_MAX_HOLD_DAYS = max(1, int(os.getenv("SIM_AUTO_MAX_HOLD_DAYS", "3")))
 KNOWLEDGE_WIKI_DIR = Path(os.getenv("KNOWLEDGE_WIKI_DIR", "knowledge_wiki"))
 KNOWLEDGE_WIKI_INDEX = KNOWLEDGE_WIKI_DIR / "README.md"
 KNOWLEDGE_WIKI_FACTORS = KNOWLEDGE_WIKI_DIR / "factors.md"
@@ -109,16 +122,37 @@ KNOWLEDGE_WIKI_SIGNALS = KNOWLEDGE_WIKI_DIR / "signals.md"
 KNOWLEDGE_WIKI_REPORTS = KNOWLEDGE_WIKI_DIR / "reports.md"
 KNOWLEDGE_WIKI_LEARNING = KNOWLEDGE_WIKI_DIR / "learning.md"
 KNOWLEDGE_WIKI_MARKET = KNOWLEDGE_WIKI_DIR / "market_memory.md"
+KNOWLEDGE_WIKI_DISTILLED = KNOWLEDGE_WIKI_DIR / "distilled.md"
 SIM_TRADE_MULTIPLIER = int(os.getenv("SIM_TRADE_MULTIPLIER", "100"))
 WEBULL_LIVE_CONFIG = Path(os.getenv("WEBULL_LIVE_CONFIG", "webull_live_config.json"))
 WEBULL_LIVE_STATE = Path(os.getenv("WEBULL_LIVE_STATE", "webull_live_state.json"))
+HISTORICAL_RESEARCH_DIR = Path(os.getenv("HISTORICAL_RESEARCH_DIR", "cache/historical_research"))
+HISTORICAL_RESEARCH_STATE = HISTORICAL_RESEARCH_DIR / "research_state.json"
+HISTORICAL_FORECAST_MEMORY = HISTORICAL_RESEARCH_DIR / "forecast_memory.json"
+WINNER_PROFILE_CACHE = Path(os.getenv("WINNER_PROFILE_CACHE", "cache/winner_profile.json"))
+USER_FOCUS_CACHE = Path(os.getenv("USER_FOCUS_CACHE", "cache/user_focus_profile.json"))
+SESSION_SCREEN_CACHE = Path(os.getenv("SESSION_SCREEN_CACHE", "cache/session_screening.json"))
+SESSION_SCREEN_REFRESH_MINUTES = max(1, int(os.getenv("SESSION_SCREEN_REFRESH_MINUTES", "15")))
 SIM_TRADING_DIR.mkdir(parents=True, exist_ok=True)
 KNOWLEDGE_WIKI_DIR.mkdir(parents=True, exist_ok=True)
 WEBULL_LIVE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
 WEBULL_LIVE_STATE.parent.mkdir(parents=True, exist_ok=True)
 SIM_STATE_LOCK = threading.Lock()
+SESSION_SCREEN_LOCK = threading.Lock()
 
-for _path in (CHART_LIBRARY_DIR, CHART_LIBRARY_INBOX, CHART_LIBRARY_ARCHIVE, MARKETCAP_CACHE.parent, UNUSUAL_OPTIONS_CACHE.parent, KNOWLEDGE_WIKI_DIR, MARKET_ENV_CACHE.parent):
+for _path in (
+    CHART_LIBRARY_DIR,
+    CHART_LIBRARY_INBOX,
+    CHART_LIBRARY_ARCHIVE,
+    MARKETCAP_CACHE.parent,
+    UNUSUAL_OPTIONS_CACHE.parent,
+    KNOWLEDGE_WIKI_DIR,
+    MARKET_ENV_CACHE.parent,
+    HISTORICAL_RESEARCH_DIR,
+    WINNER_PROFILE_CACHE.parent,
+    USER_FOCUS_CACHE.parent,
+    SESSION_SCREEN_CACHE.parent,
+):
     _path.mkdir(parents=True, exist_ok=True)
 
 
@@ -310,7 +344,13 @@ def _twelvedata_history(symbol: str, interval: str = "1day", outputsize: int = 1
     return pd.DataFrame(rows).set_index("t").sort_index()
 
 
-def _alpha_vantage_history(symbol: str, function: str = "TIME_SERIES_DAILY_ADJUSTED", interval: str = "5min", api_key: str | None = None) -> pd.DataFrame:
+def _alpha_vantage_history(
+    symbol: str,
+    function: str = "TIME_SERIES_DAILY_ADJUSTED",
+    interval: str = "5min",
+    api_key: str | None = None,
+    outputsize: str = "compact",
+) -> pd.DataFrame:
     key = (api_key or ALPHAVANTAGE_API_KEY).strip()
     if not key:
         return _empty_df()
@@ -319,7 +359,7 @@ def _alpha_vantage_history(symbol: str, function: str = "TIME_SERIES_DAILY_ADJUS
         "function": function,
         "symbol": _normalize_symbol(symbol).split(".")[0],
         "apikey": key,
-        "outputsize": "compact",
+        "outputsize": outputsize,
     }
     if function == "TIME_SERIES_INTRADAY":
         params["interval"] = interval
@@ -910,6 +950,27 @@ def _top50_reason_cn(
             parts.append(f"自主学习加分 {float(learning_bonus):.2f}")
         except Exception:
             pass
+    research_bonus = row.get("research_bonus")
+    if research_bonus:
+        try:
+            parts.append(f"5Y研究加分 {float(research_bonus):.2f}")
+        except Exception:
+            pass
+    research_signal = row.get("research_signal") or plan.get("research_signal")
+    if research_signal:
+        parts.append(f"研究信号 {research_signal}")
+    setup_confidence = row.get("setup_confidence") or plan.get("setup_confidence")
+    if setup_confidence is not None:
+        try:
+            parts.append(f"计划置信度 {float(setup_confidence):.1f}")
+        except Exception:
+            pass
+    execution_tier = row.get("execution_tier") or plan.get("execution_tier")
+    if execution_tier:
+        parts.append(f"执行等级 {execution_tier}")
+    focus_reason = (profile.get("user_focus") or {}).get("symbol_reasons", {}).get(symbol)
+    if focus_reason:
+        parts.append(f"命中你的高胜率关注池：{focus_reason}")
 
     pre_score = row.get("pre_score")
     if pre_score is not None:
@@ -1274,6 +1335,45 @@ def _chunked(seq: list[str], size: int = 80):
         yield seq[i : i + size]
 
 
+def _diversify_ranked_rows(rows: list[dict[str, Any]], limit: int, max_per_symbol: int = 2) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    limit = max(1, int(limit))
+    max_per_symbol = max(1, int(max_per_symbol))
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        if symbol not in grouped:
+            grouped[symbol] = []
+            order.append(symbol)
+        grouped[symbol].append(row)
+    selected: list[dict[str, Any]] = []
+    round_idx = 0
+    while len(selected) < limit:
+        added = 0
+        for symbol in order:
+            bucket = grouped.get(symbol) or []
+            if round_idx >= len(bucket) or round_idx >= max_per_symbol:
+                continue
+            selected.append(bucket[round_idx])
+            added += 1
+            if len(selected) >= limit:
+                break
+        if added <= 0:
+            break
+        round_idx += 1
+    if len(selected) < limit:
+        used_ids = {id(item) for item in selected}
+        for row in rows:
+            if id(row) in used_ids:
+                continue
+            selected.append(row)
+            if len(selected) >= limit:
+                break
+    return selected[:limit]
+
+
 def _now_et_iso() -> str:
     return dt.datetime.now(ET).isoformat()
 
@@ -1425,6 +1525,26 @@ def _default_sim_state() -> dict[str, Any]:
         "updated_at": None,
         "trades": [],
         "closed": [],
+        "auto": {
+            "enabled": True,
+            "updated_at": None,
+            "last_cycle_at": None,
+            "last_open_at": None,
+            "last_close_at": None,
+            "last_action": None,
+            "last_message": None,
+            "last_open_signature": None,
+            "last_close_signature": None,
+            "max_open": SIM_AUTO_MAX_OPEN,
+            "max_new_per_cycle": SIM_AUTO_MAX_NEW_PER_CYCLE,
+            "max_new_per_day": SIM_AUTO_MAX_NEW_PER_DAY,
+            "cooldown_minutes": SIM_AUTO_COOLDOWN_MINUTES,
+            "min_setup_confidence": SIM_AUTO_MIN_SETUP_CONFIDENCE,
+            "min_combined_score": SIM_AUTO_MIN_COMBINED_SCORE,
+            "min_risk_reward": SIM_AUTO_MIN_RR,
+            "max_spread_pct": SIM_AUTO_MAX_SPREAD_PCT,
+            "max_hold_days": SIM_AUTO_MAX_HOLD_DAYS,
+        },
     }
 
 
@@ -1512,6 +1632,33 @@ def _default_signal_memory() -> dict[str, Any]:
     }
 
 
+def _default_sim_commands() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "close_all": None,
+        "last_result": None,
+    }
+
+
+def _default_strategy_distillate() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "version": 1,
+        "confidence": 0.0,
+        "essence": [],
+        "playbook": [],
+        "avoid": [],
+        "focus_symbols": [],
+        "source_bias": [],
+        "factor_bias": [],
+        "environment_bias": [],
+        "winner_symbols": [],
+        "pending_signals": [],
+        "pending_forecasts": [],
+        "raw_summary": "",
+    }
+
+
 def _load_sim_state() -> dict[str, Any]:
     with SIM_STATE_LOCK:
         if not SIM_TRADING_STATE.exists():
@@ -1520,6 +1667,8 @@ def _load_sim_state() -> dict[str, Any]:
             payload = json.loads(SIM_TRADING_STATE.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 return _default_sim_state()
+            default_auto = _default_sim_state()["auto"]
+            payload["auto"] = {**default_auto, **(payload.get("auto") or {})} if isinstance(payload.get("auto"), dict) else default_auto
             payload.setdefault("trades", [])
             payload.setdefault("closed", [])
             payload.setdefault("updated_at", None)
@@ -1535,6 +1684,35 @@ def _save_sim_state(state: dict[str, Any]) -> None:
             json.dumps(state, ensure_ascii=False, indent=2, default=_iso_timestamp),
             encoding="utf-8",
         )
+
+
+def _sim_auto_state(state: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    payload = state if isinstance(state, dict) else _load_sim_state()
+    auto = payload.get("auto") if isinstance(payload.get("auto"), dict) else {}
+    merged = {**_default_sim_state()["auto"], **auto}
+    payload["auto"] = merged
+    return merged
+
+
+def _normalize_sim_auto_state(auto: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    base = {**_default_sim_state()["auto"]}
+    if not isinstance(auto, dict):
+        return base
+    for key in base.keys():
+        if key in auto:
+            base[key] = auto[key]
+    base["enabled"] = bool(auto.get("enabled", base["enabled"]))
+    for key in ("max_open", "max_new_per_cycle", "max_new_per_day", "cooldown_minutes", "max_hold_days"):
+        try:
+            base[key] = max(1, int(auto.get(key, base[key])))
+        except Exception:
+            pass
+    for key in ("min_setup_confidence", "min_combined_score", "min_risk_reward", "max_spread_pct"):
+        try:
+            base[key] = float(auto.get(key, base[key]))
+        except Exception:
+            pass
+    return base
 
 
 def _load_learning_state() -> dict[str, Any]:
@@ -1586,6 +1764,641 @@ def _save_signal_memory(state: dict[str, Any]) -> None:
     )
 
 
+def _load_sim_commands() -> dict[str, Any]:
+    if not SIM_COMMANDS_FILE.exists():
+        return _default_sim_commands()
+    try:
+        payload = json.loads(SIM_COMMANDS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return _default_sim_commands()
+        base = _default_sim_commands()
+        base.update(payload)
+        return base
+    except Exception as exc:
+        logger.warning("sim commands load failed: %s", exc)
+        return _default_sim_commands()
+
+
+def _save_sim_commands(state: dict[str, Any]) -> None:
+    SIM_COMMANDS_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, default=_iso_timestamp),
+        encoding="utf-8",
+    )
+
+
+def _load_strategy_distillate() -> dict[str, Any]:
+    if not STRATEGY_DISTILLATE_FILE.exists():
+        return _default_strategy_distillate()
+    try:
+        payload = json.loads(STRATEGY_DISTILLATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return _default_strategy_distillate()
+        base = _default_strategy_distillate()
+        base.update(payload)
+        return base
+    except Exception as exc:
+        logger.warning("strategy distillate load failed: %s", exc)
+        return _default_strategy_distillate()
+
+
+def _save_strategy_distillate(state: dict[str, Any]) -> None:
+    STRATEGY_DISTILLATE_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, default=_iso_timestamp),
+        encoding="utf-8",
+    )
+
+
+def _enqueue_sim_close_all(scope: str, note: str, reason: str) -> dict[str, Any]:
+    state = _load_sim_commands()
+    state["close_all"] = {
+        "scope": scope,
+        "note": note,
+        "reason": reason,
+        "queued_at": _now_et_iso(),
+    }
+    state["updated_at"] = _now_et_iso()
+    _save_sim_commands(state)
+    return state["close_all"]
+
+
+def _queue_markdown_message(content: str) -> None:
+    if not content:
+        return
+
+    def _worker() -> None:
+        try:
+            send_markdown(content)
+        except Exception as exc:
+            logger.debug("async markdown push failed: %s", exc)
+
+    threading.Thread(target=_worker, name="wecom-markdown", daemon=True).start()
+
+
+def _run_sim_close_all(scope: str, note: str, reason: str) -> dict[str, Any]:
+    state = _load_sim_state()
+    open_trades = [trade for trade in state.get("trades", []) if trade.get("status") == "open"]
+    closed_trades: list[dict[str, Any]] = []
+    for trade in open_trades:
+        source = str(trade.get("source") or "manual").strip().lower()
+        if scope == "manual" and source == "auto":
+            continue
+        if scope == "auto" and source != "auto":
+            continue
+        close_price = trade.get("last_mark")
+        if close_price is None:
+            close_price = trade.get("entry_price")
+        try:
+            closed_trade = _close_sim_trade(
+                state,
+                str(trade.get("id") or ""),
+                close_price=float(close_price) if close_price is not None else None,
+                note=note,
+                close_reason=reason,
+            )
+            closed_trades.append(closed_trade)
+        except Exception as exc:
+            logger.warning("bulk sim close failed: %s", exc)
+    state["updated_at"] = _now_et_iso()
+    _save_sim_state(state)
+    if closed_trades:
+        try:
+            lines = [f"模拟仓一键平仓 | {scope} | 共 {len(closed_trades)} 笔"]
+            for trade in closed_trades[:5]:
+                lines.append(
+                    f"- {trade.get('symbol')} {trade.get('contract')} | {trade.get('realized_pnl')} | {trade.get('close_reason') or trade.get('close_note') or ''}"
+                )
+                lines.append(f"  原因: {trade.get('close_analysis') or '—'}")
+                lines.append(f"  下一步: {trade.get('next_action') or '—'}")
+            _queue_markdown_message("\n".join(lines))
+        except Exception as exc:
+            logger.debug("bulk sim close push failed: %s", exc)
+    return {"closed": closed_trades, "summary": _summarize_sim_state(state), "scope": scope, "count": len(closed_trades)}
+
+
+def _process_pending_sim_commands() -> None:
+    state = _load_sim_commands()
+    cmd = state.get("close_all")
+    if not isinstance(cmd, dict):
+        return
+    scope = str(cmd.get("scope") or "all").strip().lower()
+    note = str(cmd.get("note") or "one-click bulk exit").strip()
+    reason = str(cmd.get("reason") or "bulk_exit_all").strip()
+    try:
+        result = _run_sim_close_all(scope, note, reason)
+        state["last_result"] = result
+    finally:
+        state["close_all"] = None
+        state["updated_at"] = _now_et_iso()
+        _save_sim_commands(state)
+
+
+def _sim_command_loop() -> None:
+    while True:
+        try:
+            _process_pending_sim_commands()
+        except Exception as exc:
+            logger.warning("sim command loop failed: %s", exc)
+        try:
+            threading.Event().wait(1.5)
+        except Exception:
+            pass
+
+
+def _start_sim_command_thread() -> None:
+    if getattr(_start_sim_command_thread, "_started", False):
+        return
+    worker = threading.Thread(target=_sim_command_loop, name="sim-command-loop", daemon=True)
+    worker.start()
+    _start_sim_command_thread._started = True
+
+
+def _strategy_distill_loop() -> None:
+    while True:
+        try:
+            _build_strategy_distillate(force_refresh=True)
+        except Exception as exc:
+            logger.warning("strategy distill loop failed: %s", exc)
+        try:
+            threading.Event().wait(600.0)
+        except Exception:
+            pass
+
+
+def _start_strategy_distill_thread() -> None:
+    if getattr(_start_strategy_distill_thread, "_started", False):
+        return
+    worker = threading.Thread(target=_strategy_distill_loop, name="strategy-distill", daemon=True)
+    worker.start()
+    _start_strategy_distill_thread._started = True
+
+
+def _load_json_cache(path: Path, default: dict[str, Any]) -> dict[str, Any]:
+    if not path.exists():
+        return dict(default)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return dict(default)
+        base = dict(default)
+        base.update(payload)
+        return base
+    except Exception:
+        return dict(default)
+
+
+def _save_json_cache(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_iso_timestamp), encoding="utf-8")
+
+
+def _winner_profile_default() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "sample_count": 0,
+        "resolved_count": 0,
+        "success_count": 0,
+        "success_rate": 0.0,
+        "big_move_count": 0,
+        "setup": {},
+        "summary": [],
+        "explanation": "",
+        "top_symbols": [],
+        "distributions": {},
+    }
+
+
+USER_FOCUS_SEEDS = [
+    {"date": "2026-03-23", "symbols": ["AAPL"]},
+    {"date": "2026-04-10", "symbols": ["TSLA", "ORCL"]},
+    {"date": "2026-04-28", "symbols": ["GOOGLE"]},
+    {"date": "2026-05-10", "symbols": ["F"]},
+    {"date": "2026-05-19", "symbols": ["MU", "QCOM", "IBM", "ORCL"]},
+    {"date": "2026-05-26", "symbols": ["META"]},
+]
+USER_FOCUS_ALIASES = {
+    "GOOGLE": "GOOGL",
+    "GOOG": "GOOGL",
+    "ALPHABET": "GOOGL",
+}
+
+
+def _normalize_focus_symbol(symbol: str) -> str:
+    normalized = _normalize_symbol(symbol)
+    return USER_FOCUS_ALIASES.get(normalized, normalized)
+
+
+def _focus_cluster(symbol: str) -> str:
+    symbol = _normalize_focus_symbol(symbol)
+    if symbol in {"AAPL", "GOOGL", "META", "ORCL"}:
+        return "mega_cap_tech"
+    if symbol in {"TSLA", "F"}:
+        return "high_beta_rotation"
+    if symbol in {"MU", "QCOM"}:
+        return "semi_ai_cycle"
+    if symbol == "IBM":
+        return "enterprise_ai"
+    return "other"
+
+
+def _focus_symbol_reason(symbol: str) -> str:
+    symbol = _normalize_focus_symbol(symbol)
+    return {
+        "AAPL": "mega-cap liquidity, AI/device cycle, and clean short-DTE expression",
+        "TSLA": "high-beta momentum with strong catalyst sensitivity",
+        "ORCL": "enterprise AI/cloud re-rating plus repeatable trend structure",
+        "GOOGL": "deep liquidity, AI/search optionality, and large-cap quality",
+        "F": "lower-priced cyclical/value rotation with cheap convexity",
+        "MU": "memory-cycle leverage and strong options gamma",
+        "QCOM": "semi/handset/edge-AI exposure with liquid contracts",
+        "IBM": "enterprise AI re-rating and defensive-tech rotation",
+        "META": "cash-flow scale, AI capex narrative, and momentum continuation",
+    }.get(symbol, "liquid large-cap with a visible catalyst or trend setup")
+
+
+def _default_user_focus_profile() -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    symbol_counts: dict[str, int] = {}
+    cluster_counts: dict[str, int] = {}
+    for seed in USER_FOCUS_SEEDS:
+        seed_date = str(seed.get("date") or f"{_now_et().year}-01-01")
+        raw_symbols = seed.get("symbols") or []
+        normalized_symbols = [_normalize_focus_symbol(sym) for sym in raw_symbols if _normalize_focus_symbol(sym)]
+        for symbol in normalized_symbols:
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+            cluster = _focus_cluster(symbol)
+            cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
+            entries.append(
+                {
+                    "date": seed_date,
+                    "symbol": symbol,
+                    "cluster": cluster,
+                    "reason": _focus_symbol_reason(symbol),
+                }
+            )
+
+    weighted_symbols: dict[str, float] = {}
+    by_symbol_dates: dict[str, list[str]] = {}
+    for entry in entries:
+        by_symbol_dates.setdefault(entry["symbol"], []).append(entry["date"])
+    for symbol, count in symbol_counts.items():
+        recent_weight = 0.6
+        try:
+            latest_date = max(dt.date.fromisoformat(value) for value in by_symbol_dates.get(symbol, []))
+            days_ago = max(1, (_now_et().date() - latest_date).days)
+            recent_weight = max(0.2, 1.35 - days_ago / 120.0)
+        except Exception:
+            pass
+        weighted_symbols[symbol] = round(2.8 + count * 0.75 + recent_weight, 2)
+
+    focus_clusters = sorted(cluster_counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
+    summary = [
+        "你偏好高流动性、可快速用期权表达方向的标的，先看流动性和趋势，再看催化。",
+        "你反复关注 AAPL、TSLA、ORCL、GOOGL、F、MU、QCOM、IBM、META，说明你不是广撒网，而是盯熟悉的高胜率池子。",
+        "你的样本明显偏向短周期看涨机会，常见载体是 mega-cap tech、半导体、enterprise AI 和高 beta 轮动股。",
+        "这类名字通常有财报、AI、行业轮动、价格动量或估值修复催化，适合纳入短期期权候选。",
+    ]
+    return {
+        "updated_at": None,
+        "sample_count": len(entries),
+        "focus_symbols": list(weighted_symbols.keys()),
+        "symbol_weights": weighted_symbols,
+        "entries": entries,
+        "cluster_weights": {key: round(2.0 + value * 0.5, 2) for key, value in cluster_counts.items()},
+        "top_clusters": [{"cluster": key, "count": value} for key, value in focus_clusters],
+        "symbol_reasons": {item["symbol"]: item["reason"] for item in entries if item.get("symbol")},
+        "summary": summary,
+        "summary_line": "；".join(summary[:2]),
+    }
+
+
+def _load_user_focus_profile(force_refresh: bool = False) -> dict[str, Any]:
+    if not force_refresh:
+        cached = _load_json_cache(USER_FOCUS_CACHE, _default_user_focus_profile())
+        if cached.get("updated_at") and cached.get("focus_symbols"):
+            return cached
+    profile = _default_user_focus_profile()
+    profile["updated_at"] = _now_et_iso()
+    _save_json_cache(USER_FOCUS_CACHE, profile)
+    return profile
+
+
+def _winner_pattern_profile(force_refresh: bool = False) -> dict[str, Any]:
+    if not force_refresh:
+        cached = _load_json_cache(WINNER_PROFILE_CACHE, _winner_profile_default())
+        if cached.get("updated_at") and int(_num(cached.get("sample_count"))) > 0:
+            return cached
+
+    signal_state = _load_signal_memory()
+    signals = signal_state.get("signals", []) if isinstance(signal_state, dict) else []
+    resolved = [item for item in signals if str(item.get("status") or "").lower() == "resolved"]
+    successes = [item for item in resolved if bool(item.get("success"))]
+    big_moves = [item for item in successes if _num(item.get("directional_edge_pct")) >= 2.0]
+
+    profile = _winner_profile_default()
+    profile["updated_at"] = _now_et_iso()
+    profile["sample_count"] = len(signals)
+    profile["resolved_count"] = len(resolved)
+    profile["success_count"] = len(successes)
+    profile["success_rate"] = round(len(successes) / max(1, len(resolved)) * 100.0, 2)
+    profile["big_move_count"] = len(big_moves)
+    if not successes:
+        _save_json_cache(WINNER_PROFILE_CACHE, profile)
+        return profile
+
+    source_counts = pd.Series([str(item.get("source") or "unknown") for item in successes]).value_counts()
+    tech_counts = pd.Series([str(item.get("tech_bias") or "unknown") for item in successes]).value_counts()
+    type_counts = pd.Series([str(item.get("type") or "unknown").upper() for item in successes]).value_counts()
+    flow_counts = pd.Series([str(item.get("factor_bucket_flow") or "unknown") for item in successes]).value_counts()
+    ivrv_counts = pd.Series([str(item.get("factor_bucket_ivrv") or "unknown") for item in successes]).value_counts()
+    liq_counts = pd.Series([str(item.get("factor_bucket_liquidity") or "unknown") for item in successes]).value_counts()
+    symbol_counts = pd.Series([str(item.get("symbol") or "unknown") for item in successes]).value_counts()
+    dte_values = [_num(item.get("dte"), np.nan) for item in successes if item.get("dte") is not None]
+    dte_values = [value for value in dte_values if not math.isnan(value)]
+    premium_values = [_num(item.get("premium"), np.nan) for item in successes if item.get("premium") is not None]
+    premium_values = [value for value in premium_values if not math.isnan(value)]
+    vol_oi_values = [_num(item.get("vol_oi_ratio"), np.nan) for item in successes if item.get("vol_oi_ratio") is not None]
+    vol_oi_values = [value for value in vol_oi_values if not math.isnan(value)]
+    factor_values = [_num(item.get("factor_score"), np.nan) for item in successes if item.get("factor_score") is not None]
+    factor_values = [value for value in factor_values if not math.isnan(value)]
+    edge_values = [_num(item.get("directional_edge_pct"), np.nan) for item in successes if item.get("directional_edge_pct") is not None]
+    edge_values = [value for value in edge_values if not math.isnan(value)]
+
+    dte_low = int(round(np.percentile(dte_values, 20))) if dte_values else 5
+    dte_high = int(round(np.percentile(dte_values, 80))) if dte_values else 14
+    dominant_type = str(type_counts.index[0]) if not type_counts.empty else "CALL"
+    dominant_tech = str(tech_counts.index[0]) if not tech_counts.empty else "bullish_breakout"
+    dominant_flow = str(flow_counts.index[0]) if not flow_counts.empty else "strong"
+    dominant_ivrv = str(ivrv_counts.index[0]) if not ivrv_counts.empty else "cheap"
+    dominant_liq = str(liq_counts.index[0]) if not liq_counts.empty else "tight"
+    favored_sources = [str(idx) for idx in source_counts.index[:3]]
+
+    setup = {
+        "preferred_type": dominant_type,
+        "preferred_tech_bias": dominant_tech,
+        "preferred_flow": dominant_flow,
+        "preferred_ivrv": dominant_ivrv,
+        "preferred_liquidity": dominant_liq,
+        "preferred_sources": favored_sources,
+        "dte_range": [max(1, dte_low), max(max(1, dte_low), dte_high)],
+        "min_vol_oi_ratio": round(float(np.percentile(vol_oi_values, 40)), 2) if vol_oi_values else 1.5,
+        "min_factor_score": round(float(np.percentile(factor_values, 35)), 2) if factor_values else 10.0,
+        "min_premium": round(float(np.percentile(premium_values, 35)), 2) if premium_values else 100000.0,
+        "median_edge_pct": round(float(np.median(edge_values)), 2) if edge_values else 0.0,
+    }
+    summary = [
+        f"成功样本里 {dominant_type} 占比最高，当前更偏顺势做多。",
+        f"技术形态以 {dominant_tech} 为主，说明突破延续而不是抄底反转更有效。",
+        f"DTE 主要集中在 {setup['dte_range'][0]}-{setup['dte_range'][1]} 天。",
+        f"资金特征更偏 {dominant_flow} 流，Vol/OI 中位要求至少接近 {setup['min_vol_oi_ratio']:.1f}x。",
+        f"IVRV 主要落在 {dominant_ivrv}，流动性以 {dominant_liq} 为主。",
+    ]
+    profile["setup"] = setup
+    profile["summary"] = summary
+    profile["explanation"] = "；".join(summary)
+    profile["top_symbols"] = [{"symbol": str(idx), "count": int(count)} for idx, count in symbol_counts.head(8).items()]
+    profile["distributions"] = {
+        "source": source_counts.head(8).to_dict(),
+        "tech_bias": tech_counts.head(8).to_dict(),
+        "type": type_counts.head(8).to_dict(),
+        "flow": flow_counts.head(8).to_dict(),
+        "ivrv": ivrv_counts.head(8).to_dict(),
+        "liquidity": liq_counts.head(8).to_dict(),
+        "avg_dte": round(float(np.mean(dte_values)), 2) if dte_values else None,
+        "avg_premium": round(float(np.mean(premium_values)), 2) if premium_values else None,
+        "avg_vol_oi_ratio": round(float(np.mean(vol_oi_values)), 2) if vol_oi_values else None,
+        "avg_factor_score": round(float(np.mean(factor_values)), 2) if factor_values else None,
+        "avg_edge_pct": round(float(np.mean(edge_values)), 2) if edge_values else None,
+    }
+    _save_json_cache(WINNER_PROFILE_CACHE, profile)
+    return profile
+
+
+def _winner_pattern_bonus(plan: dict[str, Any], tech_bias: str = "", source_bucket: str = "") -> tuple[float, list[str]]:
+    profile = _winner_pattern_profile()
+    setup = profile.get("setup", {}) if isinstance(profile, dict) else {}
+    if not setup or int(_num(profile.get("success_count"))) < 8:
+        return 0.0, []
+
+    bonus = 0.0
+    tags: list[str] = []
+    plan_type = str(plan.get("type") or "").upper()
+    if plan_type == str(setup.get("preferred_type") or ""):
+        bonus += 1.35
+        tags.append("preferred_type")
+    elif plan_type:
+        bonus -= 0.85
+
+    tech_text = str(tech_bias or plan.get("tech_bias") or "").lower()
+    preferred_tech = str(setup.get("preferred_tech_bias") or "").lower()
+    if preferred_tech and preferred_tech in tech_text:
+        bonus += 1.15
+        tags.append("preferred_tech")
+    elif "bearish" in tech_text and plan_type == "CALL":
+        bonus -= 0.9
+    elif "bullish" in tech_text and plan_type == "PUT":
+        bonus -= 0.9
+
+    dte = int(_num(plan.get("dte"), 0))
+    dte_range = setup.get("dte_range") or [5, 14]
+    if dte_range[0] <= dte <= dte_range[1]:
+        bonus += 1.1
+        tags.append("core_dte")
+    elif dte > 0 and dte <= max(3, dte_range[0] - 1):
+        bonus -= 0.25
+    elif dte > dte_range[1] + 10:
+        bonus -= 0.45
+
+    flow = str(plan.get("factor_bucket_flow") or "").lower()
+    if flow == str(setup.get("preferred_flow") or "").lower():
+        bonus += 1.05
+        tags.append("preferred_flow")
+    elif flow == "weak":
+        bonus -= 0.55
+
+    ivrv = str(plan.get("factor_bucket_ivrv") or "").lower()
+    if ivrv == str(setup.get("preferred_ivrv") or "").lower():
+        bonus += 0.7
+        tags.append("preferred_ivrv")
+    elif ivrv == "expensive":
+        bonus -= 0.45
+
+    liquidity = str(plan.get("factor_bucket_liquidity") or "").lower()
+    if liquidity == str(setup.get("preferred_liquidity") or "").lower():
+        bonus += 0.55
+        tags.append("preferred_liquidity")
+    elif liquidity == "wide":
+        bonus -= 0.65
+
+    source_value = _source_bucket_from_value(source_bucket or _plan_source_bucket(plan))
+    if source_value in {str(item).lower() for item in (setup.get("preferred_sources") or [])}:
+        bonus += 0.55
+        tags.append("preferred_source")
+
+    vol_oi_ratio = _num(plan.get("vol_oi_ratio"))
+    if vol_oi_ratio >= _num(setup.get("min_vol_oi_ratio"), 1.5):
+        bonus += 0.8
+        tags.append("flow_ratio")
+    elif 0 < vol_oi_ratio < max(0.8, _num(setup.get("min_vol_oi_ratio"), 1.5) * 0.4):
+        bonus -= 0.35
+
+    premium = _num(plan.get("premium"))
+    if premium >= _num(setup.get("min_premium"), 100000.0):
+        bonus += 0.55
+        tags.append("premium_size")
+
+    factor_score = _num(plan.get("factor_score"))
+    if factor_score >= _num(setup.get("min_factor_score"), 10.0):
+        bonus += 0.65
+        tags.append("factor_score")
+
+    return round(max(-4.0, min(4.0, bonus)), 2), tags
+
+
+def _focus_bonus_for_symbol(symbol: str, cluster: str | None = None) -> tuple[float, list[str]]:
+    profile = _load_user_focus_profile()
+    normalized = _normalize_focus_symbol(symbol)
+    symbol_weights = profile.get("symbol_weights", {}) or {}
+    cluster_weights = profile.get("cluster_weights", {}) or {}
+    bonus = 0.0
+    tags: list[str] = []
+    if normalized in symbol_weights:
+        bonus += float(symbol_weights.get(normalized) or 0.0)
+        tags.append("user_focus_symbol")
+    focus_cluster = cluster or _focus_cluster(normalized)
+    if focus_cluster in cluster_weights:
+        bonus += float(cluster_weights.get(focus_cluster) or 0.0) * 0.35
+        tags.append(f"user_focus_cluster:{focus_cluster}")
+    return round(bonus, 2), tags
+
+
+def _default_session_screen_state() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "last_push_signature": {},
+        "last_push_at": {},
+        "snapshots": {},
+    }
+
+
+def _load_session_screen_state() -> dict[str, Any]:
+    return _load_json_cache(SESSION_SCREEN_CACHE, _default_session_screen_state())
+
+
+def _save_session_screen_state(state: dict[str, Any]) -> None:
+    with SESSION_SCREEN_LOCK:
+        _save_json_cache(SESSION_SCREEN_CACHE, state)
+
+
+def _session_item_key(item: dict[str, Any]) -> str:
+    symbol = _normalize_symbol(item.get("symbol") or "")
+    plan = item.get("best_plan", {}) if isinstance(item.get("best_plan"), dict) else {}
+    contract = str(plan.get("contract") or item.get("contract") or "").strip().upper()
+    plan_type = str(plan.get("type") or item.get("type") or "").strip().upper()
+    return "|".join(part for part in (symbol, contract, plan_type) if part)
+
+
+def _session_item_label(item: dict[str, Any]) -> str:
+    symbol = _normalize_symbol(item.get("symbol") or "")
+    plan = item.get("best_plan", {}) if isinstance(item.get("best_plan"), dict) else {}
+    contract = str(plan.get("contract") or item.get("contract") or "").strip()
+    plan_type = str(plan.get("type") or item.get("type") or "").strip().upper()
+    parts = [part for part in (symbol, plan_type, contract) if part]
+    return " ".join(parts) if parts else symbol or "UNKNOWN"
+
+
+def _session_change_signature(rows: list[dict[str, Any]], limit: int = 5) -> str:
+    keys: list[str] = []
+    for item in (rows or [])[:limit]:
+        key = _session_item_key(item)
+        if key:
+            keys.append(key)
+    return hashlib.sha256("||".join(keys).encode("utf-8")).hexdigest() if keys else ""
+
+
+def _session_change_summary(payload: dict[str, Any], previous: dict[str, Any] | None = None) -> str:
+    previous = previous or {}
+    top_rows = payload.get("top_candidates") or []
+    unusual_rows = (payload.get("unusual") or {}).get("rows") or []
+    prev_top = previous.get("top_candidates") or []
+    prev_unusual = (previous.get("unusual") or {}).get("rows") or []
+    distillate = payload.get("strategy_distillate") or {}
+
+    cur_top_rows = top_rows[:5]
+    prev_top_rows = prev_top[:5]
+    cur_unusual_rows = unusual_rows[:5]
+    prev_unusual_rows = prev_unusual[:5]
+
+    cur_top_keys = [_session_item_key(item) for item in cur_top_rows]
+    prev_top_keys = [_session_item_key(item) for item in prev_top_rows]
+    cur_unusual_keys = [_session_item_key(item) for item in cur_unusual_rows]
+    prev_unusual_keys = [_session_item_key(item) for item in prev_unusual_rows]
+
+    top_added = [key for key in cur_top_keys if key and key not in prev_top_keys]
+    top_removed = [key for key in prev_top_keys if key and key not in cur_top_keys]
+    unusual_added = [key for key in cur_unusual_keys if key and key not in prev_unusual_keys]
+    unusual_removed = [key for key in prev_unusual_keys if key and key not in cur_unusual_keys]
+
+    prev_top_rank = {key: idx + 1 for idx, key in enumerate(prev_top_keys) if key}
+    cur_top_rank = {key: idx + 1 for idx, key in enumerate(cur_top_keys) if key}
+    moved_up: list[str] = []
+    moved_down: list[str] = []
+    for key in cur_top_keys:
+        if key not in prev_top_rank or key not in cur_top_rank:
+            continue
+        delta = prev_top_rank[key] - cur_top_rank[key]
+        if delta >= 2:
+            moved_up.append(f"{key} ↑{delta}")
+        elif delta <= -2:
+            moved_down.append(f"{key} ↓{abs(delta)}")
+
+    lines = [
+        "### 盘中变化更新",
+        f"- 时间：{payload.get('timestamp') or _now_et_iso()}",
+        f"- 会话：{payload.get('session') or 'session'}",
+        f"- Top50：{', '.join(_session_item_label(item) for item in cur_top_rows) or '暂无'}",
+        f"- 异常：{', '.join(_session_item_label(item) for item in cur_unusual_rows) or '暂无'}",
+    ]
+    if distillate.get("essence"):
+        lines.append(f"- 蒸馏结论：{str((distillate.get('essence') or ['暂无'])[0])}")
+    if distillate.get("focus_symbols"):
+        focus_symbols = [
+            str(item.get("symbol"))
+            for item in (distillate.get("focus_symbols") or [])[:4]
+            if isinstance(item, dict) and item.get("symbol")
+        ]
+        if focus_symbols:
+            lines.append(f"- 蒸馏关注：{', '.join(focus_symbols)}")
+    if top_added or top_removed:
+        lines.append(f"- Top50 变化：新增 {', '.join(top_added[:3]) or '无'}；移出 {', '.join(top_removed[:3]) or '无'}")
+    if moved_up or moved_down:
+        lines.append(f"- Top50 排名：上升 {', '.join(moved_up[:3]) or '无'}；下降 {', '.join(moved_down[:3]) or '无'}")
+    if unusual_added or unusual_removed:
+        lines.append(f"- 异常变化：新增 {', '.join(unusual_added[:3]) or '无'}；移出 {', '.join(unusual_removed[:3]) or '无'}")
+    return "\n".join(lines)
+
+
+def _maybe_push_session_delta(session_key: str, payload: dict[str, Any]) -> bool:
+    if not session_key.startswith("premarket"):
+        return False
+    if not payload.get("scan_window_open"):
+        return False
+    state = _load_session_screen_state()
+    snapshots = state.get("snapshots", {}) if isinstance(state.get("snapshots"), dict) else {}
+    previous = snapshots.get(session_key, {}) if isinstance(snapshots.get(session_key), dict) else {}
+    current_sig = _session_change_signature(payload.get("top_candidates") or []) + "|" + _session_change_signature((payload.get("unusual") or {}).get("rows") or [])
+    current_date = str(payload.get("timestamp") or "").split("T", 1)[0] or _now_et().date().isoformat()
+    current_sig = f"{current_date}|{current_sig}"
+    if not current_sig or current_sig == str(state.get("last_push_signature", {}).get(session_key) or ""):
+        return False
+
+    message = _session_change_summary(payload, previous)
+    ok = send_markdown(message)
+    if ok:
+        state.setdefault("last_push_signature", {})[session_key] = current_sig
+        state.setdefault("last_push_at", {})[session_key] = _now_et_iso()
+        _save_session_screen_state(state)
+    return ok
+
+
 def _knowledge_file_map() -> dict[str, Path]:
     return {
         "index": KNOWLEDGE_WIKI_INDEX,
@@ -1595,6 +2408,7 @@ def _knowledge_file_map() -> dict[str, Path]:
         "reports": KNOWLEDGE_WIKI_REPORTS,
         "learning": KNOWLEDGE_WIKI_LEARNING,
         "market": KNOWLEDGE_WIKI_MARKET,
+        "distilled": KNOWLEDGE_WIKI_DISTILLED,
     }
 
 
@@ -1705,6 +2519,179 @@ def _knowledge_report_lines(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _distill_ranked_keys(mapping: dict[str, Any], top_n: int = 4, min_abs_score: float = 0.3) -> list[dict[str, Any]]:
+    positives, _ = _ranked_bucket_items(mapping or {}, top_n=top_n, min_abs_score=min_abs_score)
+    return positives
+
+
+def _strategy_distillate_lines(payload: dict[str, Any]) -> list[str]:
+    lines = [
+        "# Strategy Distillate",
+        "",
+        f"- updated_at: {payload.get('updated_at') or 'N/A'}",
+        f"- confidence: {payload.get('confidence')}",
+        f"- raw_summary: {payload.get('raw_summary') or 'N/A'}",
+        "",
+        "## Essence",
+        *([f"- {line}" for line in (payload.get("essence") or [])] or ["- none"]),
+        "",
+        "## Playbook",
+        *([f"- {line}" for line in (payload.get("playbook") or [])] or ["- none"]),
+        "",
+        "## Avoid",
+        *([f"- {line}" for line in (payload.get("avoid") or [])] or ["- none"]),
+        "",
+        "## Focus Symbols",
+        *(
+            [
+                f"- {item.get('symbol')}: {item.get('reason')}"
+                for item in (payload.get("focus_symbols") or [])
+            ]
+            or ["- none"]
+        ),
+    ]
+    return lines
+
+
+def _build_strategy_distillate(force_refresh: bool = False) -> dict[str, Any]:
+    cached = _load_strategy_distillate()
+    cached_at = _parse_iso_datetime(cached.get("updated_at"))
+    if not force_refresh and cached_at and (dt.datetime.now(ET) - cached_at).total_seconds() < 900:
+        return cached
+
+    learning = _load_learning_state()
+    signal_state = _load_signal_memory()
+    research_state = _load_historical_research_state()
+    forecast_memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    focus_profile = _load_user_focus_profile()
+    knowledge_bias = learning.get("knowledge_bias", {}) or {}
+    stats = learning.get("stats", {}) or {}
+    recent_stats = learning.get("recent_stats", {}) or {}
+    source_stats = learning.get("source_stats", {}) or {}
+    environment_stats = learning.get("environment_stats", {}) or {}
+    factor_weights = learning.get("factor_weights", {}) or {}
+
+    favored_sources = _distill_ranked_keys({k: (v or {}).get("score") for k, v in source_stats.items()}, top_n=3, min_abs_score=0.25)
+    favored_env = _distill_ranked_keys({k: (v or {}).get("score") for k, v in environment_stats.items()}, top_n=4, min_abs_score=0.2)
+    favored_factors = _distill_ranked_keys(factor_weights, top_n=4, min_abs_score=0.35)
+    weak_factors = (_ranked_bucket_items(factor_weights, top_n=4, min_abs_score=0.35)[1])[:4]
+    top_symbols = (stats.get("top_symbols") or [])[:5]
+    leaders = (research_state.get("leaders") or [])[:5]
+    open_signals = [item for item in (signal_state.get("signals") or []) if item.get("status") == "open"][-12:]
+    pending_forecasts = [
+        item for item in (forecast_memory.get("forecasts") or [])[-40:]
+        if str(item.get("status") or "").lower() == "pending"
+    ][-8:]
+
+    prefs = learning.get("preferences", {}) or {}
+    essence: list[str] = []
+    if learning.get("summary"):
+        essence.append(str(learning.get("summary")))
+    if knowledge_bias.get("summary"):
+        essence.append(str(knowledge_bias.get("summary")))
+    if recent_stats:
+        essence.append(
+            f"近7天 {recent_stats.get('samples_7d', 0)} 笔样本 / {recent_stats.get('resolved_7d', 0)} 条信号，方向偏好 {recent_stats.get('direction_7d', 'balanced')}"
+        )
+    if leaders:
+        essence.append("研究强势股: " + ", ".join(str(item.get("symbol")) for item in leaders[:4] if item.get("symbol")))
+
+    playbook: list[str] = []
+    if prefs.get("direction") in {"call", "put"}:
+        playbook.append(f"方向上优先 {str(prefs.get('direction')).upper()} 结构，除非近期环境发生反转。")
+    if prefs.get("dte") in {"short", "mid", "long"}:
+        playbook.append(f"DTE 主偏好是 {prefs.get('dte')}，新单优先往这个区间靠。")
+    if favored_sources:
+        playbook.append("优先来源: " + ", ".join(item["key"] for item in favored_sources))
+    if favored_env:
+        playbook.append("优先环境: " + ", ".join(item["key"] for item in favored_env[:3]))
+    if favored_factors:
+        playbook.append("优先因子: " + ", ".join(item["key"] for item in favored_factors[:3]))
+
+    avoid: list[str] = []
+    weak_sources = knowledge_bias.get("weak_sources") or []
+    if weak_sources:
+        avoid.append("谨慎来源: " + ", ".join(str(item.get("key")) for item in weak_sources[:3]))
+    if weak_factors:
+        avoid.append("规避因子: " + ", ".join(item["key"] for item in weak_factors[:3]))
+    if learning.get("confidence", 0) and float(learning.get("confidence", 0) or 0) < 0.45:
+        avoid.append("当前学习置信度不高，避免把单一信号当成确定性结论。")
+
+    focus_symbols: list[dict[str, Any]] = []
+    symbol_reasons = focus_profile.get("symbol_reasons", {}) if isinstance(focus_profile, dict) else {}
+    for item in top_symbols[:4]:
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        focus_symbols.append(
+            {
+                "symbol": symbol,
+                "reason": symbol_reasons.get(symbol) or f"样本 PnL {item.get('pnl')} / 胜率 {item.get('win_rate')}%",
+            }
+        )
+    for item in leaders[:4]:
+        symbol = str(item.get("symbol") or "").upper()
+        if symbol and not any(entry.get("symbol") == symbol for entry in focus_symbols):
+            focus_symbols.append(
+                {
+                    "symbol": symbol,
+                    "reason": f"历史研究 quality {item.get('quality_score')} / confidence {item.get('research_confidence')}",
+                }
+            )
+
+    pending_signal_digest = [
+        {
+            "symbol": str(item.get("symbol") or "").upper(),
+            "type": str(item.get("type") or "").upper(),
+            "source": item.get("source"),
+            "scan_date": item.get("scan_date"),
+        }
+        for item in open_signals[-8:]
+        if item.get("symbol")
+    ]
+    pending_forecast_digest = [
+        {
+            "symbol": str(item.get("symbol") or "").upper(),
+            "target_date": item.get("target_date") or item.get("forecast_date"),
+            "direction": item.get("direction"),
+            "confidence": item.get("confidence"),
+        }
+        for item in pending_forecasts[-6:]
+        if item.get("symbol")
+    ]
+
+    payload = {
+        "updated_at": _now_et_iso(),
+        "version": 1,
+        "confidence": round(_num(learning.get("confidence")), 2),
+        "essence": essence[:6],
+        "playbook": playbook[:6],
+        "avoid": avoid[:6],
+        "focus_symbols": focus_symbols[:8],
+        "source_bias": favored_sources[:4],
+        "factor_bias": favored_factors[:4],
+        "environment_bias": favored_env[:4],
+        "winner_symbols": [
+            {
+                "symbol": str(item.get("symbol") or "").upper(),
+                "quality_score": item.get("quality_score"),
+                "research_confidence": item.get("research_confidence"),
+            }
+            for item in leaders[:6]
+            if item.get("symbol")
+        ],
+        "pending_signals": pending_signal_digest,
+        "pending_forecasts": pending_forecast_digest,
+        "raw_summary": str(learning.get("summary") or ""),
+    }
+    _save_strategy_distillate(payload)
+    try:
+        _knowledge_file_map()["distilled"].write_text("\n".join(_strategy_distillate_lines(payload)), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("strategy distillate wiki write failed: %s", exc)
+    return payload
+
+
 def _write_learning_knowledge_wiki(payload: dict[str, Any], resolved_signals: list[dict[str, Any]]) -> None:
     files = _knowledge_file_map()
     files["index"].write_text(
@@ -1722,6 +2709,7 @@ def _write_learning_knowledge_wiki(payload: dict[str, Any], resolved_signals: li
                 f"- [learning.md](./{files['learning'].name})",
                 f"- [reports.md](./{files['reports'].name})",
                 f"- [market_memory.md](./{files['market'].name})",
+                f"- [distilled.md](./{files['distilled'].name})",
                 "",
             ]
             + _knowledge_report_lines(payload)
@@ -2826,6 +3814,245 @@ def _adaptive_learning_bonus(plan: dict[str, Any]) -> float:
     return round(max(-6.0, min(6.0, bonus)), 2)
 
 
+def _load_historical_research_state() -> dict[str, Any]:
+    return historical_research.load_state(HISTORICAL_RESEARCH_STATE)
+
+
+def _historical_research_profile(symbol: str = "") -> dict[str, Any]:
+    state = _load_historical_research_state()
+    forecast_memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    focus_profile = _load_user_focus_profile()
+    raw_symbol = str(symbol or "").strip().upper()
+    symbol_state = historical_research.symbol_snapshot(state, raw_symbol) if raw_symbol else {}
+    return {
+        "updated_at": state.get("updated_at"),
+        "mode": state.get("mode", "empty"),
+        "summary": state.get("summary"),
+        "aggregate": state.get("aggregate", {}) or {},
+        "coverage": state.get("coverage", {}) or {},
+        "leaders": state.get("leaders", []) or [],
+        "option_data_gaps": state.get("option_data_gaps", []) or [],
+        "next_actions": state.get("next_actions", []) or [],
+        "forecast_memory": forecast_memory.get("summary", {}) if isinstance(forecast_memory, dict) else {},
+        "user_focus": focus_profile,
+        "state_path": str(HISTORICAL_RESEARCH_STATE),
+        "base_dir": str(HISTORICAL_RESEARCH_DIR),
+        "symbol": symbol_state,
+        "live_bonus_ready": bool(symbol_state.get("status") == "ok" if symbol_state else state.get("updated_at")),
+        "auto_candidates": _research_auto_symbol_candidates(limit=16),
+    }
+
+
+def _historical_research_bonus(symbol: str, plan: dict[str, Any], tech_bias: str = "") -> float:
+    return historical_research.compute_live_bonus(_load_historical_research_state(), symbol, plan, tech_bias)
+
+
+def _weekly_forecast_payload(
+    symbol: str,
+    spot: Optional[float] = None,
+    horizon_days: int = 5,
+    refresh_history: bool = False,
+    record: bool = False,
+    adaptive_horizon: bool = True,
+    candidate_horizons: Optional[list[int]] = None,
+) -> dict[str, Any]:
+    normalized = _normalize_symbol(symbol)
+    state = _load_historical_research_state()
+    years = max(5, min(int(_num(state.get("years"), 5)), 10))
+    _seed_historical_research_stock_cache([normalized], years=years, refresh=refresh_history)
+    forecast = historical_research.forecast_symbol(
+        base_dir=HISTORICAL_RESEARCH_DIR,
+        state=state,
+        symbol=normalized,
+        spot=spot,
+        horizon_days=max(3, min(int(horizon_days or 5), 15)),
+        adaptive=adaptive_horizon,
+        candidate_horizons=candidate_horizons,
+    )
+    memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    if record and forecast.get("status") == "ok":
+        memory = historical_research.record_forecast(HISTORICAL_FORECAST_MEMORY, forecast)
+    forecast["memory_summary"] = memory.get("summary", {}) if isinstance(memory, dict) else {}
+    if isinstance(memory, dict):
+        forecast["recent_forecasts"] = memory.get("forecasts", [])[-5:]
+    return forecast
+
+
+def _rank_trade_plans_with_learning(symbol: str, trade_plans: list[dict[str, Any]], tech_bias: str = "") -> list[dict[str, Any]]:
+    research_state = _load_historical_research_state()
+    ranked: list[dict[str, Any]] = []
+    for plan in trade_plans or []:
+        item = dict(plan)
+        sim_bonus = _sim_learning_bonus(item)
+        learning_bonus = _adaptive_learning_bonus(item)
+        research_signal = historical_research.live_signal_profile(research_state, symbol, item, tech_bias)
+        research_bonus = float(research_signal.get("bonus", 0.0) or 0.0)
+        winner_bonus, winner_tags = _winner_pattern_bonus(item, tech_bias=tech_bias, source_bucket=_plan_source_bucket(item))
+        base_score = (
+            _num(item.get("risk_reward")) * 5.0
+            + _num(item.get("factor_score")) * 0.30
+            + _num(item.get("score")) * 0.01
+            + _num(item.get("unusual_score")) * 0.08
+        )
+        item["sim_bonus"] = round(sim_bonus, 2)
+        item["learning_bonus"] = round(learning_bonus, 2)
+        item["research_bonus"] = round(research_bonus, 2)
+        item["winner_pattern_bonus"] = round(winner_bonus, 2)
+        item["winner_pattern_match"] = winner_tags
+        item["research_confidence"] = round(_num(research_signal.get("confidence")), 3)
+        item["research_bias"] = research_signal.get("bias")
+        item["research_signal"] = research_signal.get("signal")
+        item["research_alignment"] = research_signal.get("alignment")
+        item["research_quality_score"] = round(_num(research_signal.get("quality_score")), 2)
+        item["live_rank_score"] = round(base_score + sim_bonus + learning_bonus + research_bonus + winner_bonus, 2)
+        item["setup_confidence"] = round(
+            max(
+                1.0,
+                min(
+                    99.0,
+                    50.0
+                    + base_score * 0.28
+                    + sim_bonus * 2.1
+                    + learning_bonus * 1.3
+                    + research_bonus * 1.9
+                    + winner_bonus * 2.0
+                    + _num(research_signal.get("confidence")) * 14.0,
+                ),
+            ),
+            1,
+        )
+        item["execution_tier"] = "A" if item["setup_confidence"] >= 74 else "B" if item["setup_confidence"] >= 62 else "C"
+        ranked.append(item)
+    ranked.sort(
+        key=lambda plan: (
+            _num(plan.get("live_rank_score")),
+            _num(plan.get("risk_reward")),
+            _num(plan.get("factor_score")),
+            _num(plan.get("score")),
+        ),
+        reverse=True,
+    )
+    return ranked
+
+
+def _parse_symbol_list(raw_symbols: Any) -> list[str]:
+    if isinstance(raw_symbols, str):
+        candidates = re.split(r"[\s,;|]+", raw_symbols)
+    elif isinstance(raw_symbols, (list, tuple, set)):
+        candidates = list(raw_symbols)
+    else:
+        candidates = []
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        symbol = _normalize_symbol(text)
+        if symbol in seen:
+            continue
+        parsed.append(symbol)
+        seen.add(symbol)
+    return parsed
+
+
+def _default_research_symbols(limit: int = 12) -> list[str]:
+    defaults = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "NFLX"]
+    return defaults[: max(1, min(int(limit or 12), len(defaults)))]
+
+
+def _research_auto_symbol_candidates(limit: int = 24) -> list[dict[str, Any]]:
+    limit = max(4, min(int(limit or 24), 80))
+    scores: dict[str, dict[str, Any]] = {}
+    now = dt.datetime.now(ET)
+    focus_profile = _load_user_focus_profile()
+    focus_symbols = {str(symbol) for symbol in (focus_profile.get("focus_symbols") or []) if str(symbol).strip()}
+    focus_weights = focus_profile.get("symbol_weights", {}) or {}
+    focus_clusters = focus_profile.get("cluster_weights", {}) or {}
+
+    def _push(symbol: Any, points: float, reason: str) -> None:
+        normalized = _normalize_symbol(str(symbol or ""))
+        if not normalized:
+            return
+        entry = scores.setdefault(normalized, {"symbol": normalized, "score": 0.0, "reasons": []})
+        entry["score"] += float(points or 0.0)
+        if reason and reason not in entry["reasons"]:
+            entry["reasons"].append(reason)
+
+    for idx, symbol in enumerate(_default_research_symbols(limit=min(limit, 12))):
+        _push(symbol, 6.0 - idx * 0.15, "core_universe")
+
+    sim_state = _load_sim_state()
+    for trade in sim_state.get("trades", [])[-80:]:
+        _push(trade.get("symbol"), 9.0, "open_trade")
+    for trade in sim_state.get("closed", [])[-120:]:
+        recency = _recency_multiplier(trade.get("closed_at") or trade.get("updated_at") or trade.get("opened_at"), half_life_days=45.0, floor=0.25, now=now)
+        _push(trade.get("symbol"), 4.5 * recency, "closed_trade")
+
+    signal_state = _load_signal_memory()
+    for signal in signal_state.get("signals", [])[-300:]:
+        recency = _recency_multiplier(signal.get("scan_date"), half_life_days=14.0, floor=0.25, now=now)
+        status = str(signal.get("status") or "").lower()
+        base = 4.0 if status == "open" else 2.6 if status == "resolved" else 1.8
+        _push(signal.get("symbol"), base * recency, f"signal_{status or 'tracked'}")
+
+    top50_payload = _load_latest_nonempty_top50_cache(max_age_hours=72.0) or {}
+    for idx, row in enumerate((top50_payload.get("rows") or [])[:20], start=1):
+        rank_scale = max(0.6, 1.6 - idx * 0.04)
+        _push(row.get("symbol"), 2.8 * rank_scale, "top50_focus")
+
+    unusual_payload = _load_latest_nonempty_unusual_cache(max_age_hours=72.0) or {}
+    for idx, row in enumerate((unusual_payload.get("rows") or [])[:25], start=1):
+        rank_scale = max(0.55, 1.5 - idx * 0.03)
+        _push(row.get("symbol"), 2.4 * rank_scale, "unusual_flow")
+
+    research_state = _load_historical_research_state()
+    for idx, item in enumerate((research_state.get("leaders") or [])[:12], start=1):
+        quality = _num(item.get("quality_score"))
+        confidence = _num(item.get("research_confidence"))
+        trade_count = _num(item.get("trade_count"))
+        points = max(1.0, quality * 1.4 + confidence * 16.0 + min(8.0, trade_count / 18.0))
+        _push(item.get("symbol"), points, "historical_research_leader")
+    for item in (research_state.get("option_data_gaps") or [])[:8]:
+        trade_count = _num(item.get("trade_count"))
+        confidence = _num(item.get("research_confidence"))
+        points = max(0.75, trade_count / 40.0 + (1.2 - min(1.0, confidence)) * 1.5)
+        _push(item.get("symbol"), points, "historical_research_gap")
+
+    forecast_memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    for item in (forecast_memory.get("forecasts") or [])[-80:]:
+        symbol = item.get("symbol")
+        status = str(item.get("status") or "pending").lower()
+        if status not in {"pending", "resolved"}:
+            continue
+        recency = _recency_multiplier(
+            item.get("forecast_date") or item.get("created_at") or item.get("target_date"),
+            half_life_days=21.0,
+            floor=0.3,
+            now=now,
+        )
+        base = 4.5 if status == "pending" else 2.2
+        _push(symbol, base * recency, f"forecast_{status}")
+
+    for symbol, weight in focus_weights.items():
+        _push(symbol, float(weight) * 1.15, "user_focus")
+    for symbol in focus_symbols:
+        cluster = _focus_cluster(symbol)
+        cluster_weight = float(focus_clusters.get(cluster, 0.0) or 0.0)
+        if cluster_weight > 0:
+            _push(symbol, cluster_weight * 0.45, f"user_focus_cluster_{cluster}")
+
+    ranked = sorted(scores.values(), key=lambda item: (float(item.get("score") or 0.0), item.get("symbol")), reverse=True)
+    return [
+        {
+            "symbol": item["symbol"],
+            "score": round(float(item.get("score") or 0.0), 2),
+            "reasons": item.get("reasons", [])[:6],
+        }
+        for item in ranked[:limit]
+    ]
+
+
 def _refresh_sim_trade(trade: dict[str, Any]) -> dict[str, Any]:
     if trade.get("status") != "open":
         return trade
@@ -2963,7 +4190,93 @@ def _build_sim_trade(payload: dict[str, Any]) -> dict[str, Any]:
     return trade
 
 
-def _close_sim_trade(state: dict[str, Any], trade_id: str, close_price: float | None = None, note: str = "") -> dict[str, Any]:
+def _sim_close_analysis(
+    trade: dict[str, Any],
+    *,
+    close_price: float | None = None,
+    close_reason: str = "",
+    note: str = "",
+) -> dict[str, str]:
+    plan = trade.get("trade_plan") if isinstance(trade.get("trade_plan"), dict) else {}
+    entry_price = _num(trade.get("entry_price"))
+    effective_close = _num(close_price, _num(trade.get("last_mark"), entry_price))
+    pnl_pct = ((effective_close - entry_price) / entry_price * 100) if entry_price > 0 else 0.0
+    opt_type = str(trade.get("option_type") or plan.get("type") or "").upper()
+    age_days = int(_num(trade.get("days_held"), 0))
+    dte = int(_num(plan.get("dte"), _num(trade.get("dte"), 0)))
+    trigger = _num(plan.get("underlying_trigger"))
+    invalidation = _num(plan.get("underlying_invalidation"))
+    stop_loss = _num(plan.get("stop_loss"))
+    take_profit = _num(plan.get("take_profit"))
+    underlying = trade.get("underlying_snapshot") if isinstance(trade.get("underlying_snapshot"), dict) else {}
+    underlying_price = _num(underlying.get("price"), _num(trade.get("last_underlying")))
+    parts = []
+    reason_key = str(close_reason or "").strip().lower()
+
+    if reason_key == "stop_loss" or (stop_loss and effective_close <= stop_loss):
+        parts.append("价格/权利金触及止损线，原始假设已经失效。")
+    elif reason_key == "take_profit" or (take_profit and effective_close >= take_profit):
+        parts.append("已经到达目标位，盈亏比收益被兑现。")
+    elif reason_key in {"time_exit", "dte_decay"} or age_days >= 1:
+        parts.append("持有时间进入衰减阶段，theta 风险开始压过继续等待的边际收益。")
+    elif reason_key == "underlying_invalidation":
+        parts.append("正股已经穿越失效位，方向判断不再成立。")
+    elif reason_key in {"failed_breakout", "failed_breakdown"}:
+        parts.append("触发位之后没有形成持续扩散，动能确认失败。")
+    elif reason_key in {"manual_bulk_exit", "bulk_exit_all"}:
+        parts.append("这是旧的手动仓位，按统一规则一键清理，避免仓位分散和样本污染。")
+    else:
+        parts.append("当前仓位的收益/风险比不再占优，保留继续持有的理由不足。")
+
+    if pnl_pct >= 15:
+        parts.append("本次退出属于顺势兑现，避免把浮盈重新交回市场。")
+    elif pnl_pct <= -15:
+        parts.append("本次退出是风险控制，不再让亏损继续扩大。")
+    elif abs(pnl_pct) < 5:
+        parts.append("当前变化不够大，继续持有不提供额外样本优势。")
+
+    if reason_key in {"manual_bulk_exit", "bulk_exit_all"}:
+        next_action = "下一次优先只保留自动仓；如果再手动介入，只挑 setup_confidence 更高、流动性更好的单子。"
+    elif reason_key in {"stop_loss", "underlying_invalidation", "failed_breakout", "failed_breakdown"}:
+        next_action = "下一次等正股重新站回触发位，或者直接切换到反向结构，不要原方向硬扛。"
+    elif reason_key in {"take_profit"}:
+        next_action = "下一次只在更强的延续/回踩确认后再进，优先找更干净的趋势结构。"
+    elif reason_key in {"time_exit", "dte_decay"}:
+        next_action = "下一次优先缩短或拉长 DTE 到更匹配样本胜率的区间，并缩短持有周期。"
+    else:
+        next_action = "下一次继续沿当前样本风格，但把入场放到更清晰的确认位。"
+
+    if trigger or invalidation or stop_loss or take_profit:
+        parts.append(
+            "关键位："
+            + " / ".join(
+                [
+                    f"触发 {trigger if trigger else '—'}",
+                    f"失效 {invalidation if invalidation else '—'}",
+                    f"止损 {stop_loss if stop_loss else '—'}",
+                    f"止盈 {take_profit if take_profit else '—'}",
+                ]
+            )
+        )
+    if underlying_price:
+        parts.append(f"正股参考 {underlying_price}")
+    if note:
+        parts.append(f"备注：{note}")
+
+    return {
+        "analysis": " ".join(parts),
+        "next_action": next_action,
+        "reason_key": reason_key or "general_exit",
+    }
+
+
+def _close_sim_trade(
+    state: dict[str, Any],
+    trade_id: str,
+    close_price: float | None = None,
+    note: str = "",
+    close_reason: str = "",
+) -> dict[str, Any]:
     trades = state.get("trades", [])
     for idx, trade in enumerate(trades):
         if trade.get("id") != trade_id:
@@ -2982,12 +4295,16 @@ def _close_sim_trade(state: dict[str, Any], trade_id: str, close_price: float | 
         entry_price = float(trade.get("entry_price") or 0)
         qty = int(trade.get("qty") or 1)
         realized = (float(close_price) - entry_price) * qty * SIM_TRADE_MULTIPLIER
+        close_meta = _sim_close_analysis(trade, close_price=close_price, close_reason=close_reason, note=note)
         trade["status"] = "closed"
         trade["close_price"] = round(float(close_price), 4)
         trade["closed_at"] = _now_et_iso()
         trade["realized_pnl"] = round(realized, 2)
         trade["realized_pnl_pct"] = round((float(close_price) - entry_price) / entry_price * 100, 2) if entry_price > 0 else None
         trade["close_note"] = note
+        trade["close_reason"] = close_meta["reason_key"]
+        trade["close_analysis"] = close_meta["analysis"]
+        trade["next_action"] = close_meta["next_action"]
         trade["updated_at"] = trade["closed_at"]
         state["trades"][idx] = trade
         closed = state.setdefault("closed", [])
@@ -2995,6 +4312,411 @@ def _close_sim_trade(state: dict[str, Any], trade_id: str, close_price: float | 
         state["closed"] = closed[-500:]
         return trade
     raise ValueError("trade not found")
+
+
+def _sim_trade_signature(trade: dict[str, Any]) -> str:
+    plan = trade.get("trade_plan") if isinstance(trade.get("trade_plan"), dict) else {}
+    parts = [
+        str(trade.get("symbol") or "").upper(),
+        str(trade.get("contract") or plan.get("contract") or "").strip(),
+        str(trade.get("expiry") or plan.get("expiry") or "").strip(),
+        str(trade.get("strike") or plan.get("strike") or "").strip(),
+        str(trade.get("option_type") or plan.get("type") or "").upper(),
+    ]
+    return "|".join(parts)
+
+
+def _distillate_focus_bonus(candidate: dict[str, Any], distillate: dict[str, Any]) -> tuple[float, list[str]]:
+    if not isinstance(candidate, dict) or not isinstance(distillate, dict):
+        return 0.0, []
+    plan = candidate.get("best_plan") if isinstance(candidate.get("best_plan"), dict) else {}
+    symbol = _normalize_symbol(candidate.get("symbol") or "")
+    option_type = str(plan.get("type") or candidate.get("option_type") or "").upper()
+    dte = int(_num(plan.get("dte"), 0))
+    score = 0.0
+    reasons: list[str] = []
+
+    focus_map = {
+        _normalize_symbol(item.get("symbol")): str(item.get("reason") or "").strip()
+        for item in (distillate.get("focus_symbols") or [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    if symbol and symbol in focus_map:
+        score += 3.2
+        reason = focus_map.get(symbol) or "蒸馏关注池命中"
+        reasons.append(f"focus:{symbol}:{reason}")
+
+    pending_signal_map = {
+        _normalize_symbol(item.get("symbol")): str(item.get("type") or "").upper()
+        for item in (distillate.get("pending_signals") or [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    pending_signal = pending_signal_map.get(symbol)
+    if symbol and pending_signal and pending_signal == option_type:
+        score += 1.6
+        reasons.append(f"pending_signal:{symbol}:{pending_signal}")
+
+    pending_forecasts = {
+        _normalize_symbol(item.get("symbol")): str(item.get("direction") or "").lower()
+        for item in (distillate.get("pending_forecasts") or [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    forecast_direction = pending_forecasts.get(symbol)
+    if forecast_direction:
+        if forecast_direction in {"up", "bullish", "call"} and option_type == "CALL":
+            score += 1.8
+            reasons.append(f"pending_forecast:{symbol}:up")
+        elif forecast_direction in {"down", "bearish", "put"} and option_type == "PUT":
+            score += 1.8
+            reasons.append(f"pending_forecast:{symbol}:down")
+
+    playbook_text = " ".join(str(item).lower() for item in (distillate.get("playbook") or []) if item)
+    avoid_text = " ".join(str(item).lower() for item in (distillate.get("avoid") or []) if item)
+    if "short" in playbook_text and 0 < dte <= 14:
+        score += 0.8
+        reasons.append("playbook:short_dte")
+    elif "mid" in playbook_text and 14 < dte <= 35:
+        score += 0.8
+        reasons.append("playbook:mid_dte")
+    elif "long" in playbook_text and dte > 35:
+        score += 0.8
+        reasons.append("playbook:long_dte")
+
+    if "call" in playbook_text and option_type == "CALL":
+        score += 0.6
+        reasons.append("playbook:call_bias")
+    elif "put" in playbook_text and option_type == "PUT":
+        score += 0.6
+        reasons.append("playbook:put_bias")
+
+    spread_pct = _num(plan.get("spread_pct"))
+    if ("liquidity_wide" in avoid_text or "wide" in avoid_text) and spread_pct >= 18:
+        score -= 1.4
+        reasons.append("avoid:wide_spread")
+    source_mix = [str(item).lower() for item in (candidate.get("source_mix") or []) if item]
+    if "scan" in avoid_text and "scan" in source_mix:
+        score -= 0.8
+        reasons.append("avoid:scan_source")
+    if "unusual" in avoid_text and "unusual" in source_mix:
+        score -= 0.8
+        reasons.append("avoid:unusual_source")
+    return round(score, 2), reasons[:8]
+
+
+def _candidate_auto_score(candidate: dict[str, Any], distillate: dict[str, Any] | None = None) -> tuple[float, dict[str, Any]]:
+    plan = candidate.get("best_plan") if isinstance(candidate.get("best_plan"), dict) else {}
+    source_mix = candidate.get("source_mix") if isinstance(candidate.get("source_mix"), list) else []
+    score = (
+        _num(candidate.get("combined_score"), _num(candidate.get("final_score")))
+        + _num(candidate.get("setup_confidence")) * 0.32
+        + _num(plan.get("setup_confidence"), _num(candidate.get("setup_confidence"))) * 0.18
+        + _num(plan.get("risk_reward")) * 3.2
+        + _num(candidate.get("focus_bonus")) * 1.6
+        + _num(plan.get("research_confidence")) * 4.0
+        + _num(plan.get("winner_pattern_bonus")) * 1.4
+        + _num(plan.get("sim_bonus")) * 0.6
+        + _num(plan.get("learning_bonus")) * 0.6
+    )
+    if len(source_mix) >= 2:
+        score += 2.0
+    if "unusual" in source_mix:
+        score += 1.5
+    tier = str(candidate.get("execution_tier") or plan.get("execution_tier") or "").upper()
+    if tier == "A":
+        score += 2.0
+    elif tier == "B":
+        score += 0.8
+    spread_pct = _num(plan.get("spread_pct"))
+    if spread_pct > 0:
+        score -= min(4.0, spread_pct / 6.0)
+    distillate_bonus, distillate_reasons = _distillate_focus_bonus(candidate, distillate or {})
+    score += distillate_bonus
+    breakdown = {
+        "base_score": round(score - distillate_bonus, 2),
+        "distillate_bonus": distillate_bonus,
+        "distillate_reasons": distillate_reasons,
+        "final_score": round(score, 2),
+    }
+    return round(score, 2), breakdown
+
+
+def _candidate_trade_signature(candidate: dict[str, Any], session_key: str = "") -> str:
+    plan = candidate.get("best_plan") if isinstance(candidate.get("best_plan"), dict) else {}
+    return "|".join(
+        [
+            session_key,
+            str(candidate.get("symbol") or "").upper(),
+            str(plan.get("contract") or candidate.get("contract") or "").strip(),
+            str(plan.get("expiry") or "").strip(),
+            str(plan.get("strike") or "").strip(),
+            str(plan.get("type") or candidate.get("option_type") or "").upper(),
+        ]
+    )
+
+
+def _auto_sim_trade_context(now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    state = _load_sim_state()
+    auto = _sim_auto_state(state)
+    open_trades = [trade for trade in state.get("trades", []) if trade.get("status") == "open"]
+    closed = state.get("closed", [])
+    todays_open = 0
+    open_signatures = { _sim_trade_signature(trade) for trade in open_trades }
+    recent_closed = set()
+    for trade in open_trades:
+        opened_at = _parse_iso_datetime(trade.get("opened_at"))
+        if opened_at and opened_at.astimezone(ET).date() == now_et.date():
+            todays_open += 1
+    for trade in closed[-40:]:
+        sig = _sim_trade_signature(trade)
+        recent_closed.add(sig)
+        opened_at = _parse_iso_datetime(trade.get("opened_at"))
+        if opened_at and opened_at.astimezone(ET).date() == now_et.date():
+            todays_open += 1
+    return {
+        "state": state,
+        "auto": auto,
+        "open_trades": open_trades,
+        "closed_trades": closed,
+        "open_signatures": open_signatures,
+        "recent_closed_signatures": recent_closed,
+        "todays_open": todays_open,
+        "now_et": now_et,
+    }
+
+
+def _auto_sim_select_candidate(snapshot: dict[str, Any], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+    auto = context.get("auto") or {}
+    open_signatures = context.get("open_signatures") or set()
+    recent_closed_signatures = context.get("recent_closed_signatures") or set()
+    open_trades = context.get("open_trades") or []
+    todays_open = int(context.get("todays_open") or 0)
+    max_open = int(auto.get("max_open", SIM_AUTO_MAX_OPEN) or SIM_AUTO_MAX_OPEN)
+    max_new_per_day = int(auto.get("max_new_per_day", SIM_AUTO_MAX_NEW_PER_DAY) or SIM_AUTO_MAX_NEW_PER_DAY)
+    if len(open_trades) >= max_open:
+        return None
+    if todays_open >= max_new_per_day:
+        return None
+
+    rows = snapshot.get("top_candidates") or []
+    distillate = snapshot.get("strategy_distillate") if isinstance(snapshot.get("strategy_distillate"), dict) else {}
+    if not isinstance(rows, list) or not rows:
+        return None
+
+    min_setup_confidence = float(auto.get("min_setup_confidence", SIM_AUTO_MIN_SETUP_CONFIDENCE) or SIM_AUTO_MIN_SETUP_CONFIDENCE)
+    min_combined_score = float(auto.get("min_combined_score", SIM_AUTO_MIN_COMBINED_SCORE) or SIM_AUTO_MIN_COMBINED_SCORE)
+    min_risk_reward = float(auto.get("min_risk_reward", SIM_AUTO_MIN_RR) or SIM_AUTO_MIN_RR)
+    max_spread_pct = float(auto.get("max_spread_pct", SIM_AUTO_MAX_SPREAD_PCT) or SIM_AUTO_MAX_SPREAD_PCT)
+    cooldown_minutes = int(auto.get("cooldown_minutes", SIM_AUTO_COOLDOWN_MINUTES) or SIM_AUTO_COOLDOWN_MINUTES)
+    now_et = context.get("now_et") or dt.datetime.now(ET)
+    last_open_at = _parse_iso_datetime(auto.get("last_open_at"))
+    if last_open_at and (now_et - last_open_at).total_seconds() < cooldown_minutes * 60:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        plan = row.get("best_plan") if isinstance(row.get("best_plan"), dict) else {}
+        if not plan or not plan.get("contract") or not plan.get("expiry") or plan.get("strike") is None:
+            continue
+        if not row.get("symbol"):
+            continue
+        signature = _candidate_trade_signature(row, str(snapshot.get("session") or ""))
+        if signature in open_signatures or signature in recent_closed_signatures:
+            continue
+        setup_confidence = _num(row.get("setup_confidence"), _num(plan.get("setup_confidence")))
+        combined_score = _num(row.get("combined_score"), _num(row.get("final_score")))
+        risk_reward = _num(plan.get("risk_reward"))
+        spread_pct = _num(plan.get("spread_pct"))
+        if setup_confidence < min_setup_confidence:
+            continue
+        if combined_score < min_combined_score:
+            continue
+        if risk_reward < min_risk_reward:
+            continue
+        if spread_pct and spread_pct > max_spread_pct:
+            continue
+        if str(plan.get("execution_tier") or row.get("execution_tier") or "").upper() == "C":
+            continue
+        if _num(plan.get("entry")) <= 0:
+            continue
+        if str(plan.get("source") or "").lower().startswith("stock_proxy"):
+            continue
+        row_score, score_breakdown = _candidate_auto_score(row, distillate=distillate)
+        candidates.append(
+            {
+                "row": row,
+                "plan": plan,
+                "score": row_score,
+                "score_breakdown": score_breakdown,
+                "signature": signature,
+            }
+        )
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item["score"], _num(item["row"].get("combined_score")), _num(item["row"].get("setup_confidence"))), reverse=True)
+    return candidates[0]
+
+
+def _auto_sim_close_conditions(trade: dict[str, Any], auto: dict[str, Any]) -> Optional[str]:
+    plan = trade.get("trade_plan") if isinstance(trade.get("trade_plan"), dict) else {}
+    entry = _num(trade.get("entry_price"))
+    current = _num(trade.get("last_mark"), entry)
+    stop_loss = _num(plan.get("stop_loss"), _num(trade.get("stop_loss")))
+    take_profit = _num(plan.get("take_profit"), _num(trade.get("take_profit")))
+    if stop_loss and current <= stop_loss:
+        return "stop_loss"
+    if take_profit and current >= take_profit:
+        return "take_profit"
+
+    dte = int(_num(plan.get("dte"), _num(trade.get("dte"), 0)))
+    max_hold_days = int(auto.get("max_hold_days", SIM_AUTO_MAX_HOLD_DAYS) or SIM_AUTO_MAX_HOLD_DAYS)
+    age_days = int(_num(trade.get("days_held"), 0))
+    if age_days >= max_hold_days:
+        return "time_exit"
+    if dte and age_days >= max(1, min(max_hold_days, max(1, dte // 2 + 1))):
+        return "dte_decay"
+
+    underlying = trade.get("underlying_snapshot") if isinstance(trade.get("underlying_snapshot"), dict) else {}
+    trigger = _num(plan.get("underlying_trigger"))
+    invalidation = _num(plan.get("underlying_invalidation"))
+    underlying_price = _num(underlying.get("price"), _num(trade.get("last_underlying")))
+    opt_type = str(trade.get("option_type") or plan.get("type") or "").upper()
+    if invalidation and underlying_price:
+        if opt_type == "CALL" and underlying_price <= invalidation:
+            return "underlying_invalidation"
+        if opt_type == "PUT" and underlying_price >= invalidation:
+            return "underlying_invalidation"
+    if trigger and underlying_price:
+        if opt_type == "CALL" and underlying_price >= trigger and current <= entry * 0.9:
+            return "failed_breakout"
+        if opt_type == "PUT" and underlying_price <= trigger and current <= entry * 0.9:
+            return "failed_breakdown"
+    return None
+
+
+def _auto_sim_open_trade(candidate: dict[str, Any], context: dict[str, Any], session_key: str) -> Optional[dict[str, Any]]:
+    state = context["state"]
+    auto = context["auto"]
+    row = candidate["row"]
+    plan = candidate["plan"]
+    score_breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
+    distillate_reasons = score_breakdown.get("distillate_reasons") or []
+    payload = {
+        "symbol": row.get("symbol"),
+        "name": row.get("name") or row.get("symbol"),
+        "contract": plan.get("contract"),
+        "option_type": plan.get("type") or row.get("option_type") or "CALL",
+        "expiry": plan.get("expiry"),
+        "strike": plan.get("strike"),
+        "qty": 1,
+        "source": "auto",
+        "notes": f"auto:{session_key}|score={candidate['score']}|tier={row.get('execution_tier') or plan.get('execution_tier')}|distillate={','.join(str(item) for item in distillate_reasons[:4]) or 'none'}",
+        "entry_price": plan.get("entry"),
+        "trade_plan": plan,
+        "origin": {
+            "source": "auto_session",
+            "session": session_key,
+            "candidate_score": candidate["score"],
+            "score_breakdown": score_breakdown,
+            "row_score": row.get("combined_score") or row.get("final_score"),
+            "source_mix": row.get("source_mix") or [],
+            "distillate_updated_at": ((context.get("snapshot") or {}).get("strategy_distillate") or {}).get("updated_at"),
+        },
+    }
+    trade = _build_sim_trade(payload)
+    state.setdefault("trades", []).append(trade)
+    auto["last_open_at"] = trade.get("opened_at")
+    auto["last_open_signature"] = candidate["signature"]
+    auto["last_action"] = f"open:{trade.get('symbol')}:{trade.get('contract')}"
+    auto["updated_at"] = _now_et_iso()
+    state["updated_at"] = auto["updated_at"]
+    _save_sim_state(state)
+    return trade
+
+
+def _run_sim_auto_cycle(now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    context = _auto_sim_trade_context(now_et)
+    state = context["state"]
+    auto = context["auto"]
+    if not auto.get("enabled", True):
+        auto["updated_at"] = _now_et_iso()
+        state["updated_at"] = auto["updated_at"]
+        _save_sim_state(state)
+        return {"opened": [], "closed": [], "skipped": "disabled", "state": state}
+
+    window_open = _session_scan_window_open(now_et)
+    opened: list[dict[str, Any]] = []
+    closed: list[dict[str, Any]] = []
+    session_key = "premarket_5h"
+    snapshot = {}
+    if window_open:
+        snapshot = _build_session_screen(session_key, refresh=False, prefer_cached=True, include_forecast=True)
+        if not snapshot.get("top_candidates"):
+            snapshot = _build_session_screen(session_key, refresh=True, prefer_cached=False, include_forecast=True)
+
+    for trade in list(context.get("open_trades") or []):
+        if not window_open:
+            continue
+        reason = _auto_sim_close_conditions(trade, auto)
+        if not reason:
+            continue
+        try:
+            closed_trade = _close_sim_trade(state, str(trade.get("id") or ""), note=f"auto:{reason}", close_reason=reason)
+            closed.append(closed_trade)
+        except Exception as exc:
+            logger.warning("auto sim close failed: %s", exc)
+
+    if window_open and snapshot and not closed:
+        context["snapshot"] = snapshot
+        candidate = _auto_sim_select_candidate(snapshot, context)
+        if candidate and len(opened) < int(auto.get("max_new_per_cycle", SIM_AUTO_MAX_NEW_PER_CYCLE) or SIM_AUTO_MAX_NEW_PER_CYCLE):
+            try:
+                trade = _auto_sim_open_trade(candidate, context, session_key)
+                if trade:
+                    opened.append(trade)
+                    auto["last_candidate_summary"] = {
+                        "symbol": candidate["row"].get("symbol"),
+                        "contract": candidate["plan"].get("contract"),
+                        "score": candidate.get("score"),
+                        "score_breakdown": candidate.get("score_breakdown") or {},
+                        "selected_at": _now_et_iso(),
+                    }
+            except Exception as exc:
+                logger.warning("auto sim open failed: %s", exc)
+
+    auto["last_cycle_at"] = _now_et_iso()
+    if closed:
+        auto["last_close_at"] = closed[-1].get("closed_at") or _now_et_iso()
+        auto["last_close_signature"] = _sim_trade_signature(closed[-1])
+        auto["last_action"] = f"close:{closed[-1].get('symbol')}:{closed[-1].get('contract')}"
+    auto["updated_at"] = auto["last_cycle_at"]
+    auto["last_message"] = f"opened {len(opened)} / closed {len(closed)} / window {'open' if window_open else 'closed'}"
+    if not auto.get("last_action"):
+        auto["last_action"] = auto["last_message"]
+    state["auto"] = auto
+    state["updated_at"] = auto["updated_at"]
+    _save_sim_state(state)
+
+    if opened or closed:
+        parts = [f"自动模拟交易更新 | {now_et.astimezone(ET).strftime('%Y-%m-%d %H:%M ET')}"]
+        if opened:
+            for trade in opened[:3]:
+                parts.append(f"- 开仓 {trade.get('symbol')} {trade.get('contract')} @ {trade.get('entry_price')}")
+        if closed:
+            for trade in closed[:3]:
+                parts.append(
+                    f"- 平仓 {trade.get('symbol')} {trade.get('contract')} | PnL {trade.get('realized_pnl')} | {trade.get('close_reason') or trade.get('close_note') or ''}\n  原因: {trade.get('close_analysis') or '—'}\n  下一步: {trade.get('next_action') or '—'}"
+                )
+        try:
+            send_markdown("\n".join(parts))
+        except Exception as exc:
+            logger.debug("auto sim push failed: %s", exc)
+
+    return {"opened": opened, "closed": closed, "snapshot": snapshot, "state": state, "auto": auto}
 
 
 def _default_webull_config() -> dict[str, Any]:
@@ -4139,6 +5861,64 @@ def _build_trade_plans(symbol: str, hist: pd.DataFrame, contracts: list[dict], s
     return plans
 
 
+def _build_stock_proxy_plan(symbol: str, hist: pd.DataFrame, spot: float, tech_bias: str, source_bucket: str = "stock_proxy") -> dict[str, Any]:
+    recent_high = _safe(hist["High"].tail(10).max()) if not hist.empty and "High" in hist else _safe(spot)
+    recent_low = _safe(hist["Low"].tail(10).min()) if not hist.empty and "Low" in hist else _safe(spot)
+    atr = _atr(hist, 14) or max(0.5, spot * 0.018)
+    bullish = "bullish" in str(tech_bias or "").lower() or str(tech_bias or "").lower() == "oversold"
+    plan_type = "CALL" if bullish else "PUT"
+    trigger = round((recent_high or spot) + max(0.1, atr * 0.15), 2) if bullish else round((recent_low or spot) - max(0.1, atr * 0.15), 2)
+    invalidation = round((recent_low or spot) - max(0.1, atr * 0.2), 2) if bullish else round((recent_high or spot) + max(0.1, atr * 0.2), 2)
+    stop_gap = max(0.25, atr * 0.85)
+    target_gap = max(stop_gap * 1.9, atr * 1.6)
+    rr = round(target_gap / max(stop_gap, 0.01), 2)
+    momentum = 0.0
+    if not hist.empty and "Close" in hist:
+        close = hist["Close"].dropna()
+        if len(close) >= 6:
+            momentum = _num((close.iloc[-1] / close.iloc[-6] - 1.0) * 100.0)
+    return {
+        "symbol": symbol,
+        "contract": None,
+        "type": plan_type,
+        "expiry": None,
+        "strike": None,
+        "lb_symbol": None,
+        "bid": None,
+        "ask": None,
+        "last": _safe(spot),
+        "direction": "bullish" if bullish else "bearish",
+        "entry": _safe(spot),
+        "stop_loss": round(spot - stop_gap, 2) if bullish else round(spot + stop_gap, 2),
+        "take_profit": round(spot + target_gap, 2) if bullish else round(spot - target_gap, 2),
+        "risk_reward": rr,
+        "underlying_trigger": trigger,
+        "underlying_invalidation": invalidation,
+        "dte": 5,
+        "score": round(25.0 + abs(momentum) * 3.0, 2),
+        "iv_pct": None,
+        "oi": 0,
+        "volume": 0,
+        "spread_pct": None,
+        "reason": "stock-proxy fallback because live option chain was unavailable or rate-limited",
+        "scan_bucket": source_bucket,
+        "scan_reason": "stock_proxy_fallback",
+        "unusual_score": 0.0,
+        "vol_oi_ratio": 0.0,
+        "premium": 0.0,
+        "factor_score": round(6.0 + min(8.0, abs(momentum)), 2),
+        "iv_hv_spread": None,
+        "term_iv_spread": None,
+        "skew_support": None,
+        "flow_strength": None,
+        "liquidity_score": 0.0,
+        "factor_bucket_ivrv": "neutral",
+        "factor_bucket_skew": "neutral",
+        "factor_bucket_flow": "normal",
+        "factor_bucket_liquidity": "fair",
+    }
+
+
 def _get_hv(hist: pd.DataFrame, days: int = 30) -> Optional[float]:
     if hist.empty or "Close" not in hist:
         return None
@@ -4349,6 +6129,8 @@ def _strategy_text(
     iv_rank,
     trade_plans: Optional[list[dict]] = None,
     library_conclusion: Optional[dict[str, Any]] = None,
+    research_profile: Optional[dict[str, Any]] = None,
+    weekly_forecast: Optional[dict[str, Any]] = None,
 ) -> dict:
     if not contracts:
         return {}
@@ -4375,6 +6157,9 @@ def _strategy_text(
     confidence = conclusion.get('confidence', 0)
     sim_learning = _sim_learning_profile()
     adaptive_learning = _adaptive_learning_profile()
+    research = research_profile or {}
+    research_symbol = research.get("symbol", {}) if isinstance(research, dict) else {}
+    forecast = weekly_forecast or {}
     tech_plan = None
     if tech_type and tech_type != plan_type:
         tech_plan = next(
@@ -4396,6 +6181,20 @@ def _strategy_text(
     if adaptive_learning:
         lines.append(
             f"自主学习: {adaptive_learning.get('summary', '—')}"
+        )
+    if research_symbol and research_symbol.get("status") == "ok":
+        lines.append(
+            f"5Y研究: 胜率 {research_symbol.get('win_rate', '—')}% / MaxDD {research_symbol.get('max_drawdown_pct', '—')}% / Calmar {research_symbol.get('calmar', '—')} / 偏向 {research_symbol.get('bias', 'balanced')} / 置信度 {best_plan.get('research_confidence', research_symbol.get('research_confidence', '—'))}"
+        )
+    elif research.get("summary"):
+        lines.append(f"5Y研究: {research.get('summary')}")
+    if best_plan:
+        lines.append(
+            f"执行等级: {best_plan.get('execution_tier', 'C')} / 计划置信度 {best_plan.get('setup_confidence', '—')} / 研究信号 {best_plan.get('research_signal', 'mixed')}"
+        )
+    if forecast.get("status") == "ok":
+        lines.append(
+            f"未来一周: {forecast.get('direction')} / 预期涨跌 {forecast.get('expected_move_pct')}% / 目标 {forecast.get('expected_close')} / 区间 {forecast.get('range_low')}-{forecast.get('range_high')} / 置信度 {forecast.get('confidence')}"
         )
     if tech_plan:
         lines.append(
@@ -4422,6 +6221,9 @@ def _strategy_text(
                 f'标的当前偏向: {direction}',
                 f'当前波动环境: ATM IV {atm_iv}% / IV Rank {iv_rank}',
                 f'经验库画像: {library_summary}',
+                f"5Y研究偏向: {research_symbol.get('bias', 'n/a') if research_symbol else 'n/a'} / Calmar {research_symbol.get('calmar', '—') if research_symbol else '—'}",
+                f"执行等级: {best_plan.get('execution_tier', 'C')} / 计划置信度 {best_plan.get('setup_confidence', '—')}",
+                f"未来一周: {forecast.get('direction', 'n/a')} / 预期 {forecast.get('expected_move_pct', '—')}% / 目标价 {forecast.get('expected_close', '—')}",
             ],
         },
         {
@@ -4484,6 +6286,8 @@ def _strategy_text(
         'scenario_cards': scenario_cards,
         'risk_checks': risk_checks,
         'adaptive_learning': adaptive_learning,
+        'historical_research': research,
+        'weekly_forecast': forecast,
         'tech_plan': tech_plan,
         'alternate_plan': alternate_plan,
     }
@@ -4916,6 +6720,69 @@ def _daily_history(symbol: str, count: int = 120) -> tuple[pd.DataFrame, str]:
     return hist.tail(count) if not hist.empty else hist, "yahoo"
 
 
+def _historical_research_fetch_history(symbol: str, years: int = 5) -> tuple[pd.DataFrame, str]:
+    count = max(260, min(int(years * 252 + 40), 1600))
+    hist = _empty_df()
+    source = "longbridge"
+    if count <= 1000:
+        hist = _longbridge_history(symbol, count)
+    if hist.empty:
+        hist = _twelvedata_history(symbol, interval="1day", outputsize=min(count, 5000))
+        source = "twelvedata"
+    if hist.empty:
+        hist = _alpha_vantage_history(symbol, function="TIME_SERIES_DAILY_ADJUSTED", outputsize="full")
+        source = "alphavantage"
+    if hist.empty:
+        hist = _yahoo_history(symbol, period=f"{years}y")
+        source = "yahoo"
+    hist = _normalize_index(hist)
+    if hist.empty:
+        return hist, source
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = [str(col[0]) for col in hist.columns]
+    for col in ("Open", "High", "Low", "Close"):
+        if col not in hist.columns:
+            return _empty_df(), source
+        hist[col] = pd.to_numeric(hist[col], errors="coerce")
+    if "Volume" not in hist.columns:
+        hist["Volume"] = 0.0
+    hist["Volume"] = pd.to_numeric(hist["Volume"], errors="coerce").fillna(0.0)
+    hist = hist[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"]).sort_index()
+    return hist, source
+
+
+def _seed_historical_research_stock_cache(symbols: list[str], years: int = 5, refresh: bool = False) -> dict[str, Any]:
+    dirs = historical_research.ensure_dirs(HISTORICAL_RESEARCH_DIR)
+    summary: dict[str, Any] = {"symbols": {}, "rows": 0}
+    for symbol in symbols:
+        normalized = _normalize_symbol(symbol)
+        path = dirs["stock"] / f"{normalized}.csv"
+        if path.exists() and not refresh:
+            existing = historical_research.load_stock_history(HISTORICAL_RESEARCH_DIR, normalized)
+            summary["symbols"][normalized] = {
+                "status": "cached" if not existing.empty else "missing",
+                "rows": int(len(existing)),
+                "path": str(path),
+            }
+            summary["rows"] += int(len(existing))
+            continue
+        hist, source = _historical_research_fetch_history(normalized, years=years)
+        if hist.empty:
+            summary["symbols"][normalized] = {"status": "error", "rows": 0, "source": source, "path": str(path)}
+            continue
+        hist.reset_index(names="Date").to_csv(path, index=False)
+        summary["symbols"][normalized] = {
+            "status": "ok",
+            "rows": int(len(hist)),
+            "source": source,
+            "from": hist.index.min().date().isoformat(),
+            "to": hist.index.max().date().isoformat(),
+            "path": str(path),
+        }
+        summary["rows"] += int(len(hist))
+    return summary
+
+
 def _score_unusual_options(full: pd.DataFrame) -> pd.DataFrame:
     if full.empty:
         return full
@@ -5090,6 +6957,14 @@ def _unusual_reason_cn(row: dict[str, Any], plan: dict[str, Any], profile: dict[
         parts.append("权利金规模较大，资金参与度更高")
     if plan.get("risk_reward") is not None:
         parts.append(f"计划RR {float(plan.get('risk_reward')):.2f}")
+    if plan.get("research_bonus") is not None:
+        parts.append(f"5Y研究加分 {float(plan.get('research_bonus')):.2f}")
+    if plan.get("research_signal"):
+        parts.append(f"研究信号 {plan.get('research_signal')}")
+    if plan.get("setup_confidence") is not None:
+        parts.append(f"计划置信度 {float(plan.get('setup_confidence')):.1f}")
+    if plan.get("execution_tier"):
+        parts.append(f"执行等级 {plan.get('execution_tier')}")
     return "；".join(parts)
 
 
@@ -5193,7 +7068,8 @@ def _scan_unusual_symbol(
     tech_bias = _tech_signal(spot, sma20, sma50, rsi)
     hv30 = _get_hv(hist, 30)
 
-    full = _build_option_candidates(symbol, spot, min_dte, max_dte, "both", otm_range, enrich_quotes=True, allow_yfinance=False)
+    # Start with a lighter chain build so one symbol does not consume the whole scan budget.
+    full = _build_option_candidates(symbol, spot, min_dte, max_dte, "both", otm_range, enrich_quotes=False, allow_yfinance=False)
     if not full.empty and not _has_option_activity_data(full):
         enriched_subset = _enrich_longbridge_activity_subset(full, spot, max_rows=max(top_per_symbol * 40, 120))
         if not enriched_subset.empty and _has_option_activity_data(enriched_subset):
@@ -5258,7 +7134,11 @@ def _scan_unusual_symbol(
     contracts = _option_contracts(symbol, top)
     iv_vals = full["iv_pct"].dropna()
     iv_rank = _safe((iv_vals.mean() - iv_vals.min()) / (iv_vals.max() - iv_vals.min()) * 100) if not iv_vals.empty and iv_vals.max() != iv_vals.min() else 50.0
-    plans = _tag_trade_plans_source(_build_trade_plans(symbol, hist, contracts, spot, tech_bias, iv_rank), "unusual_daily")
+    plans = _rank_trade_plans_with_learning(
+        symbol,
+        _tag_trade_plans_source(_build_trade_plans(symbol, hist, contracts, spot, tech_bias, iv_rank), "unusual_daily"),
+        tech_bias,
+    )
     plan_by_contract = {plan.get("contract"): plan for plan in plans}
     profile = _cached_company_profile(symbol)
     news_items = _cached_recent_news(symbol, 2)
@@ -5286,10 +7166,12 @@ def _scan_unusual_symbol(
             }
         )
         style_bonus = _library_style_bonus(plan, conclusion)
-        sim_bonus = _sim_learning_bonus(plan)
-        learning_bonus = _adaptive_learning_bonus(plan)
+        sim_bonus = _num(plan.get("sim_bonus"))
+        learning_bonus = _num(plan.get("learning_bonus"))
+        research_bonus = _num(plan.get("research_bonus"))
+        winner_bonus = _num(plan.get("winner_pattern_bonus"))
         direction_bonus = _unusual_direction_bonus(plan.get("type"), tech_bias)
-        final_score = _num(contract.get("unusual_score")) + style_bonus + sim_bonus + learning_bonus + direction_bonus + _num(row.get("pre_score")) * 0.04
+        final_score = _num(contract.get("unusual_score")) + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus + direction_bonus + _num(row.get("pre_score")) * 0.04
         output = {
             "symbol": symbol,
             "name": row.get("name") or profile.get("long_name") or symbol,
@@ -5327,6 +7209,13 @@ def _scan_unusual_symbol(
             "style_bonus": style_bonus,
             "sim_bonus": sim_bonus,
             "learning_bonus": learning_bonus,
+            "research_bonus": research_bonus,
+            "winner_pattern_bonus": winner_bonus,
+            "winner_pattern_match": plan.get("winner_pattern_match"),
+            "research_confidence": plan.get("research_confidence"),
+            "research_signal": plan.get("research_signal"),
+            "execution_tier": plan.get("execution_tier"),
+            "setup_confidence": plan.get("setup_confidence"),
             "direction_bonus": direction_bonus,
             "final_score": round(final_score, 2),
         }
@@ -5372,15 +7261,25 @@ def _scan_daily_unusual_options(
     }
     cached = _load_unusual_cache(cache_key, max_age_hours=cache_max_age_hours)
     latest_nonempty = _load_latest_nonempty_unusual_cache(max_age_hours=max(cache_max_age_hours, 24.0))
+    cached_rows = cached.get("rows") or [] if isinstance(cached, dict) else []
+    cached_unique_symbols = len({str(item.get("symbol") or "") for item in cached_rows if item.get("symbol")}) if cached_rows else 0
     if cached and not refresh:
+        if cached_rows and cached_unique_symbols >= 2:
+            return cached
+        if latest_nonempty:
+            latest_nonempty["fallback_reason"] = "cached_scan_sparse"
+            latest_nonempty["timestamp"] = _now_et_iso()
+            latest_nonempty["cache_key"] = cache_key
+            return latest_nonempty
         return cached
     if cached and refresh:
         fetched_at = _parse_utc_datetime(cached.get("fetched_at"))
         stale_seconds = (_utc_now() - fetched_at).total_seconds() if fetched_at else None
-        if stale_seconds is not None and stale_seconds < 15 * 60:
+        if stale_seconds is not None and stale_seconds < 15 * 60 and cached_rows and cached_unique_symbols >= 2:
             return cached
 
     profile = _chart_library_profile() if use_library_bias else {"tag_counts": {}}
+    profile["user_focus"] = _load_user_focus_profile()
     bias = _chart_library_bias(profile)
     conclusion = profile.get("conclusion", {}) if isinstance(profile, dict) else {}
     universe = _load_marketcap_universe(universe_size, refresh=refresh)
@@ -5451,7 +7350,8 @@ def _scan_daily_unusual_options(
         if relaxed_rows:
             rows = relaxed_rows
 
-    rows = sorted(rows, key=lambda item: item.get("final_score", 0), reverse=True)[:limit]
+    rows = sorted(rows, key=lambda item: item.get("final_score", 0), reverse=True)
+    rows = _diversify_ranked_rows(rows, limit=limit, max_per_symbol=max(1, min(2, top_per_symbol)))
     for idx, item in enumerate(rows, start=1):
         item["rank"] = idx
     for item in rows[: min(len(rows), 20)]:
@@ -5467,10 +7367,12 @@ def _scan_daily_unusual_options(
         "universe_size": len(universe),
         "prefiltered_size": len(prefiltered),
         "scanned_symbols": scanned_symbols,
+        "unique_symbols": len({str(item.get("symbol") or "") for item in rows if item.get("symbol")}),
         "returned": len(rows),
         "profile": profile,
         "conclusion": conclusion,
         "bias": bias,
+        "historical_research": _historical_research_profile(),
         "errors": errors[:20],
         "rows": rows,
         "partial": bool((_utc_now() - started_at).total_seconds() >= max_runtime_seconds),
@@ -5632,18 +7534,47 @@ def scan():
         iv_skew = _safe(put_iv - call_iv)
 
         signal = _iv_signal(iv_rank, iv_skew)
-        trade_plans = _tag_trade_plans_source(_build_trade_plans(symbol, hist90, contracts, spot, tech_bias, iv_rank), "scan")
+        trade_plans = _rank_trade_plans_with_learning(
+            symbol,
+            _tag_trade_plans_source(_build_trade_plans(symbol, hist90, contracts, spot, tech_bias, iv_rank), "scan"),
+            tech_bias,
+        )
         _record_signal_candidates(symbol, spot, trade_plans, tech_bias, source="scan")
-        strategy = _strategy_text(symbol, contracts, spot, tech_bias, atm_iv, iv_rank, trade_plans=trade_plans, library_conclusion=library_conclusion)
+        research_profile = _historical_research_profile(symbol)
+        weekly_forecast = _weekly_forecast_payload(
+            symbol,
+            spot=spot,
+            horizon_days=int(body.get("forecast_horizon_days", 5)),
+            refresh_history=bool(body.get("refresh_forecast_history", False)),
+            record=bool(body.get("record_forecast", False)),
+            adaptive_horizon=bool(body.get("adaptive_forecast_horizon", True)),
+            candidate_horizons=body.get("forecast_candidate_horizons") if isinstance(body.get("forecast_candidate_horizons"), list) else None,
+        )
+        strategy = _strategy_text(
+            symbol,
+            contracts,
+            spot,
+            tech_bias,
+            atm_iv,
+            iv_rank,
+            trade_plans=trade_plans,
+            library_conclusion=library_conclusion,
+            research_profile=research_profile,
+            weekly_forecast=weekly_forecast,
+        )
         strategy["ai_mode"] = ai_mode
         strategy["ai_provider"] = body.get("ai_provider", "deepseek")
         strategy["sim_learning"] = _sim_learning_profile()
         strategy["adaptive_learning"] = _adaptive_learning_profile()
+        strategy["historical_research"] = research_profile
+        strategy["weekly_forecast"] = weekly_forecast
         strategy["knowledge_context"] = _knowledge_context_for_prompt(max_chars=1200)
         strategy["factor_summary"] = {
             "hv30": hv30,
             "front_atm_iv": atm_iv,
             "top_factor_scores": [plan.get("factor_score") for plan in trade_plans[:3]],
+            "top_research_scores": [plan.get("research_bonus") for plan in trade_plans[:3]],
+            "weekly_expected_move_pct": weekly_forecast.get("expected_move_pct"),
         }
         if enable_ai:
             ai_text_prompt = (
@@ -5653,6 +7584,8 @@ def scan():
                 f"IV Rank: {iv_rank}\n"
                 f"ATM IV: {atm_iv}\n"
                 f"经验库结论: {json.dumps(library_conclusion, ensure_ascii=False)}\n"
+                f"5Y研究: {json.dumps(research_profile.get('symbol') or {'summary': research_profile.get('summary')}, ensure_ascii=False)}\n"
+                f"未来一周预测: {json.dumps(weekly_forecast, ensure_ascii=False)}\n"
                 f"自主学习知识库: {strategy['knowledge_context']}\n"
                 f"候选交易: {json.dumps(trade_plans[:3], ensure_ascii=False)}\n"
                 f"用户补充: {ai_prompt}\n"
@@ -5700,6 +7633,9 @@ def scan():
                 "library_profile": library_profile,
                 "library_conclusion": library_conclusion,
                 "learning_profile": _adaptive_learning_profile(),
+                "strategy_distillate": _build_strategy_distillate(force_refresh=False),
+                "historical_research": research_profile,
+                "weekly_forecast": weekly_forecast,
                 "ai_mode": ai_mode,
                 "ai_providers": [p.get("name") for p in ai_providers],
             }
@@ -5918,7 +7854,9 @@ def library_file(filename):
 
 @app.route("/api/sim/portfolio", methods=["GET"])
 def sim_portfolio():
-    state = _refresh_sim_state(_load_sim_state())
+    refresh = str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    state = _refresh_sim_state(_load_sim_state()) if refresh else _load_sim_state()
+    auto = _sim_auto_state(state)
     return jsonify(
         {
             "summary": _summarize_sim_state(state),
@@ -5926,8 +7864,45 @@ def sim_portfolio():
             "closed_trades": state.get("closed", [])[-20:],
             "updated_at": state.get("updated_at"),
             "learning": _adaptive_learning_profile(),
+            "strategy_distillate": _build_strategy_distillate(force_refresh=False),
+            "auto": auto,
+            "refreshed": refresh,
         }
     )
+
+
+@app.route("/api/sim/auto", methods=["GET", "POST"])
+def sim_auto():
+    state = _load_sim_state()
+    auto = _sim_auto_state(state)
+    if request.method == "GET":
+        return jsonify({"auto": auto, "updated_at": state.get("updated_at"), "summary": _summarize_sim_state(state)})
+
+    body = request.get_json(silent=True) or {}
+    if "enabled" in body:
+        auto["enabled"] = bool(body.get("enabled"))
+    for key in ("max_open", "max_new_per_cycle", "max_new_per_day", "cooldown_minutes", "max_hold_days"):
+        if key in body:
+            try:
+                auto[key] = max(1, int(body.get(key)))
+            except Exception:
+                pass
+    for key in ("min_setup_confidence", "min_combined_score", "min_risk_reward", "max_spread_pct"):
+        if key in body:
+            try:
+                auto[key] = float(body.get(key))
+            except Exception:
+                pass
+    state["auto"] = _normalize_sim_auto_state(auto)
+    state["updated_at"] = _now_et_iso()
+    _save_sim_state(state)
+    return jsonify({"auto": state["auto"], "updated_at": state.get("updated_at"), "summary": _summarize_sim_state(state)})
+
+
+@app.route("/api/sim/auto/run", methods=["POST"])
+def sim_auto_run():
+    result = _run_sim_auto_cycle()
+    return jsonify(result)
 
 
 @app.route("/api/sim/open", methods=["POST"])
@@ -5943,6 +7918,16 @@ def sim_open():
     state["updated_at"] = _now_et_iso()
     _save_sim_state(state)
     state = _refresh_sim_state(_load_sim_state())
+    try:
+        close_text = (
+            f"模拟仓平仓 | {trade.get('symbol')} {trade.get('contract')}\n"
+            f"- 原因: {trade.get('close_analysis') or trade.get('close_note') or trade.get('close_reason') or '—'}\n"
+            f"- 下一步: {trade.get('next_action') or '—'}\n"
+            f"- PnL: {trade.get('realized_pnl')} / {trade.get('realized_pnl_pct')}%"
+        )
+        _queue_markdown_message(close_text)
+    except Exception as exc:
+        logger.debug("manual sim close push failed: %s", exc)
     return jsonify({"trade": trade, "summary": _summarize_sim_state(state)})
 
 
@@ -5959,15 +7944,51 @@ def sim_close():
         except Exception:
             return jsonify({"error": "close_price invalid"}), 400
     note = str(body.get("note") or "")
+    reason = str(body.get("reason") or "").strip()
     state = _load_sim_state()
     try:
-        trade = _close_sim_trade(state, trade_id, close_price=close_price, note=note)
+        trade = _close_sim_trade(state, trade_id, close_price=close_price, note=note, close_reason=reason)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     state["updated_at"] = _now_et_iso()
     _save_sim_state(state)
     state = _refresh_sim_state(_load_sim_state())
     return jsonify({"trade": trade, "summary": _summarize_sim_state(state)})
+
+
+@app.route("/api/sim/close-all", methods=["GET", "POST", "OPTIONS"])
+def sim_close_all():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    if request.method == "GET":
+        scope = str(request.args.get("scope") or "all").strip().lower()
+        confirm = str(request.args.get("confirm") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not confirm:
+            state = _load_sim_state()
+            return jsonify(
+                {
+                    "scope": scope,
+                    "confirm_required": True,
+                    "open_count": len([trade for trade in state.get("trades", []) if trade.get("status") == "open"]),
+                    "summary": _summarize_sim_state(state),
+                }
+            )
+        body = {
+            "scope": scope,
+            "note": request.args.get("note") or "one-click bulk exit",
+            "reason": request.args.get("reason") or "bulk_exit_all",
+        }
+    else:
+        body = request.get_json(silent=True) or {}
+
+    scope = str(body.get("scope") or "all").strip().lower()
+    note = str(body.get("note") or "one-click bulk exit").strip()
+    reason = str(body.get("reason") or "bulk_exit_all").strip()
+    state = _load_sim_state()
+    open_count = len([trade for trade in state.get("trades", []) if trade.get("status") == "open"])
+    command = _enqueue_sim_close_all(scope, note, reason)
+    return jsonify({"queued": True, "scope": scope, "open_count": open_count, "summary": _summarize_sim_state(state), "command": command})
 
 
 @app.route("/api/webull/settings", methods=["GET", "POST"])
@@ -6116,12 +8137,21 @@ def _analyze_marketcap_universe(
         "use_library_bias": bool(use_library_bias),
     }
     cached = _load_top50_cache(cache_key, max_age_hours=cache_max_age_hours)
+    latest_nonempty = _load_latest_nonempty_top50_cache(max_age_hours=max(cache_max_age_hours, 24.0))
+    cached_rows = cached.get("rows") or [] if isinstance(cached, dict) else []
     if cached and not refresh:
+        if cached_rows:
+            return cached
+        if latest_nonempty:
+            latest_nonempty["fallback_reason"] = "cached_top50_empty"
+            latest_nonempty["timestamp"] = _now_et_iso()
+            latest_nonempty["cache_key"] = cache_key
+            return latest_nonempty
         return cached
     if cached and refresh:
         fetched_at = _parse_utc_datetime(cached.get("fetched_at"))
         stale_seconds = (_utc_now() - fetched_at).total_seconds() if fetched_at else None
-        if stale_seconds is not None and stale_seconds < 15 * 60:
+        if stale_seconds is not None and stale_seconds < 15 * 60 and cached_rows:
             return cached
 
     profile = _chart_library_profile() if use_library_bias else {"tag_counts": {}}
@@ -6181,6 +8211,64 @@ def _analyze_marketcap_universe(
         otm_range = 0.12 if dte_bias >= 0 else 0.08
         full = _build_option_candidates(symbol, spot, 7, 45, "both", otm_range, enrich_quotes=False, allow_yfinance=False)
         if full.empty:
+            full = _build_option_candidates(
+                symbol,
+                spot,
+                7,
+                45,
+                "both",
+                otm_range,
+                enrich_quotes=False,
+                allow_yfinance=True,
+                allow_longbridge=False,
+            )
+        if full.empty:
+            proxy_plan = _build_stock_proxy_plan(symbol, hist, spot, tech_bias, source_bucket="top50_stock_proxy")
+            plans = _rank_trade_plans_with_learning(symbol, [proxy_plan], tech_bias)
+            if not plans:
+                continue
+            best_plan = plans[0]
+            style_bonus = _library_style_bonus(best_plan, conclusion)
+            sim_bonus = _num(best_plan.get("sim_bonus"))
+            learning_bonus = _num(best_plan.get("learning_bonus"))
+            research_bonus = _num(best_plan.get("research_bonus"))
+            winner_bonus = _num(best_plan.get("winner_pattern_bonus"))
+            final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus
+            analyzed.append(
+                {
+                    "rank": len(analyzed) + 1,
+                    "symbol": symbol,
+                    "name": row["name"],
+                    "market_cap": row["market_cap"],
+                    "price": row["price"],
+                    "change_pct": row["change_pct"],
+                    "spot": spot,
+                    "tech_bias": tech_bias,
+                    "hv30": hv30,
+                    "rsi": _safe(rsi),
+                    "iv_rank": 50.0,
+                    "best_plan": best_plan,
+                    "source_bucket": _plan_source_bucket(best_plan),
+                    "final_score": round(final_score, 2),
+                    "style_bonus": style_bonus,
+                    "sim_bonus": sim_bonus,
+                    "learning_bonus": learning_bonus,
+                    "research_bonus": research_bonus,
+                    "winner_pattern_bonus": winner_bonus,
+                    "winner_pattern_match": best_plan.get("winner_pattern_match"),
+                    "research_confidence": best_plan.get("research_confidence"),
+                    "research_signal": best_plan.get("research_signal"),
+                    "execution_tier": best_plan.get("execution_tier"),
+                    "setup_confidence": best_plan.get("setup_confidence"),
+                    "profile_bias": bias,
+                    "fallback_mode": "stock_proxy",
+                }
+            )
+            elapsed = (_utc_now() - started_at).total_seconds()
+            if len(analyzed) >= target_analyzed:
+                break
+            if elapsed >= max_runtime_seconds and analyzed:
+                break
             continue
         full = _score_options(full)
         full = _apply_option_factor_model(full, spot, hv30, tech_bias)
@@ -6212,14 +8300,20 @@ def _analyze_marketcap_universe(
         )
         top = pd.concat([top, greeks], axis=1)
         contracts = _option_contracts(symbol, top)
-        plans = _tag_trade_plans_source(_build_trade_plans(symbol, hist, contracts, spot, tech_bias, _safe(top["iv_pct"].mean())), "pool")
+        plans = _rank_trade_plans_with_learning(
+            symbol,
+            _tag_trade_plans_source(_build_trade_plans(symbol, hist, contracts, spot, tech_bias, _safe(top["iv_pct"].mean())), "pool"),
+            tech_bias,
+        )
         if not plans:
             continue
-        best_plan = max(plans, key=lambda p: float(p.get("risk_reward") or 0))
+        best_plan = plans[0]
         style_bonus = _library_style_bonus(best_plan, conclusion)
-        sim_bonus = _sim_learning_bonus(best_plan)
-        learning_bonus = _adaptive_learning_bonus(best_plan)
-        final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus
+        sim_bonus = _num(best_plan.get("sim_bonus"))
+        learning_bonus = _num(best_plan.get("learning_bonus"))
+        research_bonus = _num(best_plan.get("research_bonus"))
+        winner_bonus = _num(best_plan.get("winner_pattern_bonus"))
+        final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus
         analyzed.append(
             {
                 "rank": len(analyzed) + 1,
@@ -6239,6 +8333,13 @@ def _analyze_marketcap_universe(
                 "style_bonus": style_bonus,
                 "sim_bonus": sim_bonus,
                 "learning_bonus": learning_bonus,
+                "research_bonus": research_bonus,
+                "winner_pattern_bonus": winner_bonus,
+                "winner_pattern_match": best_plan.get("winner_pattern_match"),
+                "research_confidence": best_plan.get("research_confidence"),
+                "research_signal": best_plan.get("research_signal"),
+                "execution_tier": best_plan.get("execution_tier"),
+                "setup_confidence": best_plan.get("setup_confidence"),
                 "profile_bias": bias,
             }
         )
@@ -6289,13 +8390,21 @@ def _analyze_marketcap_universe(
         "cache_key": cache_key,
         "universe_size": len(universe),
         "analyzed_size": len(prefiltered),
+        "unique_symbols": len({str(item.get("symbol") or "") for item in analyzed if item.get("symbol")}),
         "returned": len(analyzed),
         "profile": profile,
         "conclusion": conclusion,
         "bias": bias,
+        "historical_research": _historical_research_profile(),
+        "user_focus_profile": profile.get("user_focus", {}),
         "rows": analyzed,
         "partial": bool((_utc_now() - started_at).total_seconds() >= max_runtime_seconds),
     }
+    if not analyzed and latest_nonempty:
+        latest_nonempty["fallback_reason"] = "current_top50_empty"
+        latest_nonempty["timestamp"] = _now_et_iso()
+        latest_nonempty["cache_key"] = cache_key
+        return latest_nonempty
     try:
         market_lines = [
             f"- returned: {len(analyzed)} / analyzed_size: {len(prefiltered)} / universe_size: {len(universe)}",
@@ -6311,6 +8420,291 @@ def _analyze_marketcap_universe(
         logger.debug("market memory append skipped for top50: %s", exc)
     _save_top50_cache(payload)
     return payload
+
+
+def _session_run_targets(session_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    session_key = str(session_name or "premarket_5h").strip().lower()
+    top50_args = {
+        "limit": 12,
+        "universe_size": 120,
+        "use_library_bias": True,
+        "cache_max_age_hours": 3.0,
+        "max_runtime_seconds": 28.0,
+    }
+    unusual_args = {
+        "limit": 18,
+        "universe_size": 180,
+        "use_library_bias": True,
+        "cache_max_age_hours": 2.0,
+        "max_symbols": 28,
+        "top_per_symbol": 2,
+        "max_runtime_seconds": 28.0,
+    }
+    if session_key.startswith("postmarket"):
+        top50_args["limit"] = 15
+        unusual_args["limit"] = 22
+    return top50_args, unusual_args
+
+
+def _merge_session_candidates(
+    top50_rows: list[dict[str, Any]],
+    unusual_rows: list[dict[str, Any]],
+    session_name: str,
+    focus_profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    focus_profile = focus_profile or _load_user_focus_profile()
+    for row in top50_rows or []:
+        symbol = _normalize_symbol(row.get("symbol") or "")
+        if not symbol:
+            continue
+        plan = row.get("best_plan", {}) if isinstance(row.get("best_plan"), dict) else {}
+        focus_bonus, focus_tags = _focus_bonus_for_symbol(symbol, cluster=row.get("sector") or None)
+        merged[symbol] = {
+            "symbol": symbol,
+            "name": row.get("company_name") or row.get("name") or symbol,
+            "session": session_name,
+            "source_mix": ["top50"],
+            "top50_rank": row.get("rank"),
+            "unusual_rank": None,
+            "tech_bias": row.get("tech_bias"),
+            "spot": row.get("spot"),
+            "final_score": _num(row.get("final_score")),
+            "setup_confidence": _num(plan.get("setup_confidence"), _num(row.get("setup_confidence"))),
+            "execution_tier": plan.get("execution_tier") or row.get("execution_tier"),
+            "research_signal": plan.get("research_signal") or row.get("research_signal"),
+            "winner_pattern_bonus": _num(plan.get("winner_pattern_bonus"), _num(row.get("winner_pattern_bonus"))),
+            "winner_pattern_match": plan.get("winner_pattern_match") or row.get("winner_pattern_match") or [],
+            "best_plan": plan or row.get("best_plan"),
+            "reason_cn": row.get("reason_cn"),
+            "analysis_cn": row.get("analysis_cn"),
+            "focus_bonus": focus_bonus,
+            "focus_tags": focus_tags,
+            "focus_reason": focus_profile.get("symbol_reasons", {}).get(symbol),
+        }
+    for row in unusual_rows or []:
+        symbol = _normalize_symbol(row.get("symbol") or "")
+        if not symbol:
+            continue
+        plan = row.get("best_plan", {}) if isinstance(row.get("best_plan"), dict) else {}
+        focus_bonus, focus_tags = _focus_bonus_for_symbol(symbol, cluster=row.get("sector") or None)
+        entry = merged.get(symbol)
+        row_score = _num(row.get("final_score"))
+        row_conf = _num(plan.get("setup_confidence"), _num(row.get("setup_confidence")))
+        if entry is None:
+            merged[symbol] = {
+                "symbol": symbol,
+                "name": row.get("name") or symbol,
+                "session": session_name,
+                "source_mix": ["unusual"],
+                "top50_rank": None,
+                "unusual_rank": row.get("rank"),
+                "tech_bias": row.get("tech_bias"),
+                "spot": row.get("spot"),
+                "final_score": row_score,
+                "setup_confidence": row_conf,
+                "execution_tier": plan.get("execution_tier") or row.get("execution_tier"),
+                "research_signal": plan.get("research_signal") or row.get("research_signal"),
+                "winner_pattern_bonus": _num(plan.get("winner_pattern_bonus"), _num(row.get("winner_pattern_bonus"))),
+                "winner_pattern_match": plan.get("winner_pattern_match") or row.get("winner_pattern_match") or [],
+                "best_plan": plan or row.get("best_plan"),
+                "reason_cn": row.get("reason_cn"),
+                "analysis_cn": row.get("analysis_cn"),
+                "focus_bonus": focus_bonus,
+                "focus_tags": focus_tags,
+                "focus_reason": focus_profile.get("symbol_reasons", {}).get(symbol),
+            }
+            continue
+        if "unusual" not in entry["source_mix"]:
+            entry["source_mix"].append("unusual")
+        entry["unusual_rank"] = row.get("rank")
+        entry["final_score"] = max(entry.get("final_score", 0.0), row_score) + 2.5
+        entry["setup_confidence"] = max(entry.get("setup_confidence", 0.0), row_conf)
+        entry["winner_pattern_bonus"] = max(_num(entry.get("winner_pattern_bonus")), _num(plan.get("winner_pattern_bonus"), _num(row.get("winner_pattern_bonus"))))
+        entry["winner_pattern_match"] = sorted(set((entry.get("winner_pattern_match") or []) + (plan.get("winner_pattern_match") or row.get("winner_pattern_match") or [])))
+        entry["focus_bonus"] = max(_num(entry.get("focus_bonus")), focus_bonus)
+        entry["focus_tags"] = sorted(set((entry.get("focus_tags") or []) + focus_tags))
+        if not entry.get("focus_reason"):
+            entry["focus_reason"] = focus_profile.get("symbol_reasons", {}).get(symbol)
+        if not entry.get("reason_cn"):
+            entry["reason_cn"] = row.get("reason_cn")
+        if not entry.get("analysis_cn"):
+            entry["analysis_cn"] = row.get("analysis_cn")
+
+    ranked = sorted(
+        merged.values(),
+        key=lambda item: (
+            len(item.get("source_mix") or []),
+            _num(item.get("setup_confidence")),
+            _num(item.get("final_score")),
+            _num(item.get("winner_pattern_bonus")),
+            _num(item.get("focus_bonus")),
+        ),
+        reverse=True,
+    )
+    for idx, item in enumerate(ranked, start=1):
+        item["rank"] = idx
+        item["combined_score"] = round(
+            _num(item.get("final_score"))
+            + _num(item.get("setup_confidence")) * 0.18
+            + len(item.get("source_mix") or []) * 2.0
+            + _num(item.get("focus_bonus")) * 0.65,
+            2,
+        )
+    return ranked
+
+
+def _build_session_screen(
+    session_name: str = "premarket_5h",
+    refresh: bool = False,
+    prefer_cached: bool = False,
+    include_forecast: bool = True,
+    notify_changes: bool = False,
+) -> dict[str, Any]:
+    def _with_distillate(snapshot: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(snapshot, dict) and "strategy_distillate" not in snapshot:
+            snapshot["strategy_distillate"] = _build_strategy_distillate(force_refresh=False)
+        return snapshot
+
+    session_key = str(session_name or "premarket_5h").strip().lower()
+    if session_key == "postmarket_1h":
+        session_key = "postmarket_0_5h"
+    state = _load_session_screen_state()
+    snapshots = state.get("snapshots", {}) if isinstance(state.get("snapshots"), dict) else {}
+    cached = snapshots.get(session_key, {}) if isinstance(snapshots.get(session_key), dict) else {}
+    fetched_at = _parse_utc_datetime(cached.get("fetched_at"))
+    if prefer_cached and cached:
+        return _with_distillate(cached)
+    if cached and not refresh and fetched_at and (_utc_now() - fetched_at).total_seconds() < SESSION_SCREEN_REFRESH_MINUTES * 60:
+        return _with_distillate(cached)
+
+    top50_args, unusual_args = _session_run_targets(session_key)
+    top50 = _analyze_marketcap_universe(refresh=refresh, **top50_args)
+    unusual = _scan_daily_unusual_options(refresh=refresh, **unusual_args)
+    focus_profile = _load_user_focus_profile()
+    strategy_distillate = _build_strategy_distillate(force_refresh=refresh)
+    merged_rows = _merge_session_candidates(
+        top50.get("rows", []) if isinstance(top50, dict) else [],
+        unusual.get("rows", []) if isinstance(unusual, dict) else [],
+        session_key,
+        focus_profile=focus_profile,
+    )
+
+    if include_forecast:
+        for item in merged_rows[: min(len(merged_rows), 8)]:
+            try:
+                item["weekly_forecast"] = _weekly_forecast_payload(
+                    item.get("symbol") or "",
+                    spot=item.get("spot"),
+                    horizon_days=5,
+                    refresh_history=False,
+                    record=False,
+                    adaptive_horizon=True,
+                    candidate_horizons=[3, 5, 7, 10],
+                )
+            except Exception as exc:
+                item["weekly_forecast"] = {"status": "error", "error": str(exc)}
+
+    payload = {
+        "fetched_at": _utc_now().isoformat(),
+        "timestamp": _now_et_iso(),
+        "session": session_key,
+        "refresh_interval_minutes": SESSION_SCREEN_REFRESH_MINUTES if session_key.startswith("premarket") else 45,
+        "scan_window_open": _session_scan_window_open(),
+        "winner_profile": _winner_pattern_profile(),
+        "user_focus_profile": focus_profile,
+        "strategy_distillate": strategy_distillate,
+        "last_push_signature": (state.get("last_push_signature") or {}).get(session_key),
+        "last_push_at": (state.get("last_push_at") or {}).get(session_key),
+        "top50_returned": len(top50.get("rows", []) if isinstance(top50, dict) else []),
+        "unusual_returned": len(unusual.get("rows", []) if isinstance(unusual, dict) else []),
+        "candidate_count": len(merged_rows),
+        "top_candidates": merged_rows[:12],
+        "top50": top50,
+        "unusual": unusual,
+    }
+    state["updated_at"] = payload["timestamp"]
+    snapshots = state.setdefault("snapshots", {})
+    snapshots[session_key] = payload
+    _save_session_screen_state(state)
+    if notify_changes:
+        try:
+            _maybe_push_session_delta(session_key, payload)
+        except Exception as exc:
+            logger.warning("session delta push failed: %s", exc)
+    return payload
+
+
+def _scheduled_session_targets(now_et: Optional[dt.datetime] = None) -> dict[str, dt.datetime]:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    anchor = now_et.date()
+    return {
+        "premarket_5h": ET.localize(dt.datetime.combine(anchor, dt.time(4, 30))),
+        "postmarket_0_5h": ET.localize(dt.datetime.combine(anchor, dt.time(16, 30))),
+    }
+
+
+def _session_scan_window_open(now_et: Optional[dt.datetime] = None) -> bool:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    if now_et.weekday() >= 5:
+        return False
+    current = now_et.time()
+    return dt.time(4, 30) <= current <= dt.time(16, 30)
+
+
+def _run_due_session_screens(now_et: Optional[dt.datetime] = None) -> list[str]:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    if not _session_scan_window_open(now_et):
+        return []
+    state = _load_session_screen_state()
+    snapshots = state.get("snapshots", {}) if isinstance(state.get("snapshots"), dict) else {}
+    ran: list[str] = []
+    market_close = ET.localize(dt.datetime.combine(now_et.date(), dt.time(16, 30)))
+    for name, target in _scheduled_session_targets(now_et).items():
+        existing = snapshots.get(name, {}) if isinstance(snapshots.get(name), dict) else {}
+        previous = _parse_iso_datetime(existing.get("timestamp"))
+        interval_seconds = SESSION_SCREEN_REFRESH_MINUTES * 60 if name.startswith("premarket") else 45 * 60
+        if name.startswith("premarket"):
+            if now_et < target or now_et > market_close:
+                continue
+            if previous and (now_et - previous).total_seconds() < interval_seconds:
+                continue
+        else:
+            if now_et < target or (now_et - target).total_seconds() > 45 * 60:
+                continue
+            if previous and previous.date() == now_et.date():
+                continue
+        try:
+            _build_session_screen(name, refresh=True, prefer_cached=False, include_forecast=True, notify_changes=True)
+            ran.append(name)
+        except Exception as exc:
+            logger.warning("scheduled session screen %s failed: %s", name, exc)
+    return ran
+
+
+def _session_autorun_loop() -> None:
+    while True:
+        try:
+            _run_due_session_screens()
+        except Exception as exc:
+            logger.warning("session autorun loop failed: %s", exc)
+        try:
+            _run_sim_auto_cycle()
+        except Exception as exc:
+            logger.warning("sim auto loop failed: %s", exc)
+        try:
+            wait_seconds = 120.0 if _session_scan_window_open() else 600.0
+            threading.Event().wait(wait_seconds)
+        except Exception:
+            pass
+
+
+def _start_session_autorun_thread() -> None:
+    if getattr(_start_session_autorun_thread, "_started", False):
+        return
+    worker = threading.Thread(target=_session_autorun_loop, name="session-autorun", daemon=True)
+    worker.start()
+    _start_session_autorun_thread._started = True
 
 
 @app.route("/api/universe/top50", methods=["POST"])
@@ -6404,13 +8798,279 @@ def learning_status():
     return jsonify(_adaptive_learning_profile())
 
 
+@app.route("/api/research/status", methods=["GET"])
+def research_status():
+    raw_symbol = str(request.args.get("symbol", "") or "").strip()
+    return jsonify(_historical_research_profile(raw_symbol))
+
+
+@app.route("/api/research/user-focus", methods=["GET"])
+def research_user_focus():
+    refresh = str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return jsonify(_load_user_focus_profile(force_refresh=refresh))
+
+
+@app.route("/api/research/forecast", methods=["POST"])
+def research_forecast():
+    body = request.get_json(silent=True) or {}
+    symbols = _parse_symbol_list(body.get("symbols"))
+    if not symbols:
+        single = str(body.get("symbol", "") or "").strip()
+        if single:
+            symbols = [_normalize_symbol(single)]
+    use_auto = bool(body.get("auto_symbols", not symbols)) or any(symbol == "AUTO" for symbol in symbols)
+    if use_auto:
+        auto_candidates = _research_auto_symbol_candidates(limit=max(1, min(int(body.get("limit", 6)), 20)))
+        auto_symbols = [item.get("symbol") for item in auto_candidates if item.get("symbol")]
+        explicit = [symbol for symbol in symbols if symbol != "AUTO"]
+        merged: list[str] = []
+        seen: set[str] = set()
+        for symbol in explicit + auto_symbols:
+            normalized = _normalize_symbol(symbol)
+            if not normalized or normalized in seen:
+                continue
+            merged.append(normalized)
+            seen.add(normalized)
+        symbols = merged
+    if not symbols:
+        return jsonify({"error": "symbol or symbols required"}), 400
+
+    horizon_days = max(3, min(int(body.get("horizon_days", 5)), 15))
+    refresh_history = bool(body.get("refresh_history", False))
+    record = bool(body.get("record", True))
+    adaptive_horizon = bool(body.get("adaptive_horizon", True))
+    candidate_horizons = body.get("candidate_horizons") if isinstance(body.get("candidate_horizons"), list) else None
+    rows = [
+        _weekly_forecast_payload(
+            symbol,
+            horizon_days=horizon_days,
+            refresh_history=refresh_history,
+            record=record,
+            adaptive_horizon=adaptive_horizon,
+            candidate_horizons=candidate_horizons,
+        )
+        for symbol in symbols[: max(1, min(int(body.get("limit", len(symbols))), 20))]
+    ]
+    rows = sorted(rows, key=lambda item: (_num(item.get("confidence")), abs(_num(item.get("expected_move_pct")))), reverse=True)
+    memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    return jsonify(
+        {
+            "horizon_days": horizon_days,
+            "adaptive_horizon": adaptive_horizon,
+            "candidate_horizons": candidate_horizons or [3, 5, 7, 10, horizon_days],
+            "recorded": record,
+            "rows": rows,
+            "forecast_memory": memory.get("summary", {}) if isinstance(memory, dict) else {},
+        }
+    )
+
+
+@app.route("/api/research/forecast/status", methods=["GET"])
+def research_forecast_status():
+    memory = historical_research.resolve_forecast_memory(HISTORICAL_RESEARCH_DIR, HISTORICAL_FORECAST_MEMORY)
+    return jsonify(memory)
+
+
+@app.route("/api/research/option-sources", methods=["GET"])
+def research_option_sources():
+    return jsonify(
+        {
+            "sources": historical_research.option_source_catalog(),
+            "data_dir": str(HISTORICAL_RESEARCH_DIR / "options_raw"),
+        }
+    )
+
+
+@app.route("/api/research/option-sources/assess", methods=["GET", "POST"])
+def research_option_sources_assess():
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        symbols = _parse_symbol_list(body.get("symbols"))
+    else:
+        raw_symbols = str(request.args.get("symbols", "") or "").strip()
+        symbols = _parse_symbol_list(raw_symbols)
+    assessment = historical_research.assess_option_sources(HISTORICAL_RESEARCH_DIR, symbols=symbols or None)
+    assessment["data_dir"] = str(HISTORICAL_RESEARCH_DIR / "options_raw")
+    return jsonify(assessment)
+
+
+@app.route("/api/research/option-sources/inventory", methods=["GET"])
+def research_option_sources_inventory():
+    inventory = historical_research.option_source_inventory(HISTORICAL_RESEARCH_DIR)
+    inventory["data_dir"] = str(HISTORICAL_RESEARCH_DIR / "options_raw")
+    return jsonify(inventory)
+
+
+@app.route("/api/research/inspect", methods=["POST"])
+def research_inspect():
+    body = request.get_json(silent=True) or {}
+    raw_option_paths = body.get("option_source_paths")
+    if isinstance(raw_option_paths, list):
+        option_source_paths = [str(path).strip() for path in raw_option_paths if str(path).strip()]
+    else:
+        option_source_paths = [part.strip() for part in re.split(r"[\r\n;,|]+", str(raw_option_paths or "")) if part.strip()]
+    inspection = historical_research.inspect_option_sources(
+        base_dir=HISTORICAL_RESEARCH_DIR,
+        option_source_paths=option_source_paths or None,
+        max_files=max(1, min(int(body.get("max_files", 20)), 80)),
+    )
+    inspection["data_dir"] = str(HISTORICAL_RESEARCH_DIR)
+    return jsonify(inspection)
+
+
+@app.route("/api/research/backfill", methods=["POST"])
+def research_backfill():
+    body = request.get_json(silent=True) or {}
+    symbols = _parse_symbol_list(body.get("symbols"))
+    auto_symbol_limit = max(4, min(int(body.get("auto_symbol_limit", 24)), 80))
+    use_auto_symbols = bool(body.get("auto_symbols", not symbols)) or any(symbol == "AUTO" for symbol in symbols)
+    auto_candidates = _research_auto_symbol_candidates(limit=auto_symbol_limit) if use_auto_symbols else []
+    if use_auto_symbols:
+        auto_symbols = [item.get("symbol") for item in auto_candidates if item.get("symbol")]
+        explicit_symbols = [symbol for symbol in symbols if symbol != "AUTO"]
+        merged_symbols: list[str] = []
+        seen: set[str] = set()
+        for symbol in explicit_symbols + auto_symbols:
+            normalized = _normalize_symbol(symbol)
+            if not normalized or normalized in seen:
+                continue
+            merged_symbols.append(normalized)
+            seen.add(normalized)
+        symbols = merged_symbols
+    if not symbols:
+        symbols = _default_research_symbols(int(body.get("default_symbol_count", 12)))
+    years = max(1, min(int(body.get("years", 5)), 10))
+    horizon_days = max(3, min(int(body.get("horizon_days", 10)), 45))
+    refresh = bool(body.get("refresh", False))
+    raw_bootstrap_sources = body.get("bootstrap_option_sources")
+    if isinstance(raw_bootstrap_sources, list):
+        bootstrap_option_sources = [str(item).strip() for item in raw_bootstrap_sources if str(item).strip()]
+    else:
+        bootstrap_option_sources = [part.strip() for part in re.split(r"[\r\n;,|]+", str(raw_bootstrap_sources or "")) if part.strip()]
+    raw_option_urls = body.get("option_source_urls")
+    if isinstance(raw_option_urls, list):
+        option_source_urls = [str(item).strip() for item in raw_option_urls if str(item).strip()]
+    else:
+        option_source_urls = [part.strip() for part in re.split(r"[\r\n;,|]+", str(raw_option_urls or "")) if part.strip()]
+    raw_option_paths = body.get("option_source_paths")
+    if isinstance(raw_option_paths, list):
+        option_source_paths = [str(path).strip() for path in raw_option_paths if str(path).strip()]
+    else:
+        option_source_paths = [part.strip() for part in re.split(r"[\r\n;,|]+", str(raw_option_paths or "")) if part.strip()]
+    bootstrap_manifest = historical_research.bootstrap_option_sources(
+        base_dir=HISTORICAL_RESEARCH_DIR,
+        symbols=symbols,
+        source_codes=bootstrap_option_sources or None,
+        remote_urls=option_source_urls or None,
+        refresh=refresh,
+    ) if bootstrap_option_sources or option_source_urls else None
+    option_inspection = historical_research.inspect_option_sources(
+        base_dir=HISTORICAL_RESEARCH_DIR,
+        option_source_paths=option_source_paths or None,
+        max_files=max(1, min(int(body.get("inspect_max_files", 20)), 80)),
+    ) if option_source_paths or bootstrap_manifest or bool(body.get("inspect_option_sources", False)) else None
+    seeded_stock_history = _seed_historical_research_stock_cache(symbols, years=years, refresh=refresh)
+    payload = historical_research.run_research(
+        base_dir=HISTORICAL_RESEARCH_DIR,
+        state_path=HISTORICAL_RESEARCH_STATE,
+        symbols=symbols,
+        years=years,
+        horizon_days=horizon_days,
+        refresh=refresh,
+        option_source_paths=option_source_paths or None,
+        threshold=max(0.4, min(float(body.get("threshold", 1.15)), 6.0)),
+        skip_stock_backfill=True,
+    )
+    response = dict(payload)
+    response["requested_symbols"] = symbols
+    response["auto_symbols_used"] = use_auto_symbols
+    response["auto_candidates"] = auto_candidates
+    response["option_source_paths"] = option_source_paths
+    response["option_source_urls"] = option_source_urls
+    response["bootstrap_option_sources"] = bootstrap_option_sources
+    response["bootstrap_manifest"] = bootstrap_manifest
+    response["option_inspection"] = option_inspection
+    response["seeded_stock_history"] = seeded_stock_history
+    response["status_path"] = str(HISTORICAL_RESEARCH_STATE)
+    response["data_dir"] = str(HISTORICAL_RESEARCH_DIR)
+    return jsonify(response)
+
+
+@app.route("/api/research/winner-profile", methods=["GET"])
+def research_winner_profile():
+    refresh = str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    payload = _winner_pattern_profile(force_refresh=refresh)
+    return jsonify(payload)
+
+
+@app.route("/api/research/distillate", methods=["GET", "POST"])
+def research_distillate():
+    refresh = False
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        refresh = bool(body.get("refresh", False))
+    else:
+        refresh = str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    payload = _build_strategy_distillate(force_refresh=refresh)
+    return jsonify(payload)
+
+
+@app.route("/api/session-screen", methods=["GET", "POST"])
+def session_screen():
+    body = request.get_json(silent=True) or {}
+    session_name = (
+        body.get("session")
+        if request.method == "POST"
+        else request.args.get("session", "premarket_5h")
+    )
+    refresh = bool(body.get("refresh", False)) if request.method == "POST" else str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    prefer_cached = bool(body.get("prefer_cached", False)) if request.method == "POST" else str(request.args.get("prefer_cached", "1")).strip().lower() in {"1", "true", "yes", "on"}
+    include_forecast = bool(body.get("include_forecast", True)) if request.method == "POST" else str(request.args.get("include_forecast", "1")).strip().lower() in {"1", "true", "yes", "on"}
+    payload = _build_session_screen(
+        session_name=str(session_name or "premarket_5h"),
+        refresh=refresh,
+        prefer_cached=prefer_cached,
+        include_forecast=include_forecast,
+    )
+    return jsonify(payload)
+
+
+@app.route("/api/session-screen/status", methods=["GET"])
+def session_screen_status():
+    state = _load_session_screen_state()
+    now_et = dt.datetime.now(ET)
+    scheduled = {name: when.isoformat() for name, when in _scheduled_session_targets(now_et).items()}
+    due = _run_due_session_screens(now_et=now_et) if str(request.args.get("run_due", "")).strip().lower() in {"1", "true", "yes", "on"} else []
+    distillate = _build_strategy_distillate(force_refresh=False)
+    return jsonify(
+        {
+            "updated_at": state.get("updated_at"),
+            "scan_window_open": _session_scan_window_open(now_et),
+            "last_push_signature": state.get("last_push_signature", {}),
+            "last_push_at": state.get("last_push_at", {}),
+            "strategy_distillate": {
+                "updated_at": distillate.get("updated_at"),
+                "confidence": distillate.get("confidence"),
+                "essence": (distillate.get("essence") or [])[:3],
+                "focus_symbols": (distillate.get("focus_symbols") or [])[:5],
+            },
+            "scheduled": scheduled,
+            "due_ran": due,
+            "snapshots": list((state.get("snapshots") or {}).keys()),
+        }
+    )
+
+
 @app.route("/")
 def index():
     return app.send_static_file("index.html")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    _start_session_autorun_thread()
+    _start_sim_command_thread()
+    _start_strategy_distill_thread()
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
 
 
 

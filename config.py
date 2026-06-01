@@ -19,7 +19,7 @@ WECOM_WEBHOOK_URL = os.getenv(
 
 # ---------- 定时报告（美东时间） ----------
 # 盘前 1 小时 / 盘后 1 小时
-SCHEDULE_TIMES_ET = ["08:30", "17:00"]
+SCHEDULE_TIMES_ET = ["04:30", "16:30"]
 
 # ---------- 每日报告配置 ----------
 DAILY_REPORT_LIMIT = 10

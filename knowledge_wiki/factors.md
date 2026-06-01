@@ -1,26 +1,28 @@
 # Factor Wiki
 
 ## Favored
-- ivrv_cheap: 0.24
+- skew_supportive: 1.04
+- flow_normal: 0.57
+- ivrv_cheap: 0.52
+- liquidity_tight: 0.42
+- ivrv_rich: 0.3
 
 ## Weak
-- ivrv_neutral: -3.07
-- skew_neutral: -2.7
-- flow_weak: -2.43
-- liquidity_wide: -1.86
-- liquidity_fair: -1.22
-- flow_strong: -1.01
+- liquidity_wide: -3.11
+- flow_weak: -1.21
+- ivrv_neutral: -0.89
+- skew_neutral: -0.56
 
 ## Raw
-- flow_normal: 0.0
-- flow_strong: -1.01
-- flow_weak: -2.43
-- ivrv_cheap: 0.24
-- ivrv_neutral: -3.07
-- ivrv_rich: -0.2
-- liquidity_fair: -1.22
-- liquidity_tight: -0.32
-- liquidity_wide: -1.86
-- skew_adverse: 0.0
-- skew_neutral: -2.7
-- skew_supportive: 0.0
+- flow_normal: 0.57
+- flow_strong: -0.19
+- flow_weak: -1.21
+- ivrv_cheap: 0.52
+- ivrv_neutral: -0.89
+- ivrv_rich: 0.3
+- liquidity_fair: -0.14
+- liquidity_tight: 0.42
+- liquidity_wide: -3.11
+- skew_adverse: 0.11
+- skew_neutral: -0.56
+- skew_supportive: 1.04
