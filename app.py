@@ -2,6 +2,7 @@
 
 import datetime as dt
 import hashlib
+import ast
 import json
 import logging
 import math
@@ -9,6 +10,7 @@ import os
 import re
 import threading
 import uuid
+from collections import Counter
 from pathlib import Path
 from functools import lru_cache
 from typing import Any, Optional
@@ -57,6 +59,9 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
+logging.getLogger("webull").setLevel(logging.WARNING)
 
 app = Flask(__name__, static_folder=".", static_url_path="")
 CORS(app)
@@ -78,6 +83,11 @@ OTM_RANGE_PCT = float(os.getenv("OTM_RANGE_PCT", "0.15"))
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY", "").strip()
 ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "").strip()
+TIINGO_API_KEY = os.getenv("TIINGO_API_KEY", "").strip()
+FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
+MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "").strip()
+MASSIVE_ACCESS_KEY_ID = os.getenv("MASSIVE_ACCESS_KEY_ID", "").strip()
+MASSIVE_SECRET_ACCESS_KEY = os.getenv("MASSIVE_SECRET_ACCESS_KEY", "").strip()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip()
@@ -99,12 +109,14 @@ UNUSUAL_PREFILTER_MULTIPLIER = float(os.getenv("UNUSUAL_PREFILTER_MULTIPLIER", "
 UNUSUAL_MAX_TOP_PER_SYMBOL = int(os.getenv("UNUSUAL_MAX_TOP_PER_SYMBOL", "8"))
 UNUSUAL_MIN_TARGET_ROWS = int(os.getenv("UNUSUAL_MIN_TARGET_ROWS", "30"))
 LONGBRIDGE_OPTION_QUOTE_CHUNK = int(os.getenv("LONGBRIDGE_OPTION_QUOTE_CHUNK", "80"))
+WEBULL_STATUS_CACHE_SECONDS = max(5, int(os.getenv("WEBULL_STATUS_CACHE_SECONDS", "15")))
 SIM_TRADING_DIR = Path(os.getenv("SIM_TRADING_DIR", "sim_trading"))
 SIM_TRADING_STATE = SIM_TRADING_DIR / "sim_state.json"
 LEARNING_STATE = SIM_TRADING_DIR / "learning_state.json"
 SIGNAL_MEMORY = SIM_TRADING_DIR / "signal_memory.json"
 SIM_COMMANDS_FILE = SIM_TRADING_DIR / "sim_commands.json"
 STRATEGY_DISTILLATE_FILE = SIM_TRADING_DIR / "strategy_distillate.json"
+MARKET_HEAT_FILE = SIM_TRADING_DIR / "market_heat.json"
 SIM_AUTO_MAX_OPEN = max(1, int(os.getenv("SIM_AUTO_MAX_OPEN", "4")))
 SIM_AUTO_MAX_NEW_PER_CYCLE = max(1, int(os.getenv("SIM_AUTO_MAX_NEW_PER_CYCLE", "1")))
 SIM_AUTO_MAX_NEW_PER_DAY = max(1, int(os.getenv("SIM_AUTO_MAX_NEW_PER_DAY", "2")))
@@ -132,13 +144,23 @@ HISTORICAL_FORECAST_MEMORY = HISTORICAL_RESEARCH_DIR / "forecast_memory.json"
 WINNER_PROFILE_CACHE = Path(os.getenv("WINNER_PROFILE_CACHE", "cache/winner_profile.json"))
 USER_FOCUS_CACHE = Path(os.getenv("USER_FOCUS_CACHE", "cache/user_focus_profile.json"))
 SESSION_SCREEN_CACHE = Path(os.getenv("SESSION_SCREEN_CACHE", "cache/session_screening.json"))
+COMPANY_PROFILE_CACHE = Path(os.getenv("COMPANY_PROFILE_CACHE", "cache/company_profiles.json"))
+RECENT_NEWS_CACHE = Path(os.getenv("RECENT_NEWS_CACHE", "cache/recent_news.json"))
+OFFICIAL_CONTEXT_CACHE = Path(os.getenv("OFFICIAL_CONTEXT_CACHE", "cache/official_context.json"))
+EARNINGS_EVENT_CACHE = Path(os.getenv("EARNINGS_EVENT_CACHE", "cache/earnings_events.json"))
 SESSION_SCREEN_REFRESH_MINUTES = max(1, int(os.getenv("SESSION_SCREEN_REFRESH_MINUTES", "15")))
+SESSION_RECOMMENDATION_LIMIT = max(1, int(os.getenv("SESSION_RECOMMENDATION_LIMIT", "5")))
+LONGBRIDGE_OPTION_QUOTE_CACHE_SECONDS = max(5, int(os.getenv("LONGBRIDGE_OPTION_QUOTE_CACHE_SECONDS", "45")))
+LONGBRIDGE_OPTION_RATE_LIMIT_COOLDOWN_SECONDS = max(30, int(os.getenv("LONGBRIDGE_OPTION_RATE_LIMIT_COOLDOWN_SECONDS", "75")))
 SIM_TRADING_DIR.mkdir(parents=True, exist_ok=True)
 KNOWLEDGE_WIKI_DIR.mkdir(parents=True, exist_ok=True)
 WEBULL_LIVE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
 WEBULL_LIVE_STATE.parent.mkdir(parents=True, exist_ok=True)
 SIM_STATE_LOCK = threading.Lock()
 SESSION_SCREEN_LOCK = threading.Lock()
+OPTION_QUOTE_LOCK = threading.Lock()
+OPTION_QUOTE_CACHE: dict[str, dict[str, Any]] = {}
+LONGBRIDGE_OPTION_RATE_LIMIT_UNTIL: dt.datetime | None = None
 
 for _path in (
     CHART_LIBRARY_DIR,
@@ -152,6 +174,10 @@ for _path in (
     WINNER_PROFILE_CACHE.parent,
     USER_FOCUS_CACHE.parent,
     SESSION_SCREEN_CACHE.parent,
+    COMPANY_PROFILE_CACHE.parent,
+    RECENT_NEWS_CACHE.parent,
+    OFFICIAL_CONTEXT_CACHE.parent,
+    EARNINGS_EVENT_CACHE.parent,
 ):
     _path.mkdir(parents=True, exist_ok=True)
 
@@ -342,6 +368,58 @@ def _twelvedata_history(symbol: str, interval: str = "1day", outputsize: int = 1
     if not rows:
         return _empty_df()
     return pd.DataFrame(rows).set_index("t").sort_index()
+
+
+def _tiingo_history(symbol: str, count: int = 120, freq: str = "daily", api_key: str | None = None) -> pd.DataFrame:
+    key = (api_key or TIINGO_API_KEY).strip()
+    if not key:
+        return _empty_df()
+    normalized = _normalize_symbol(symbol).split(".")[0]
+    end_date = dt.datetime.now(ET).date()
+    start_date = end_date - dt.timedelta(days=max(30, int(count * 2.2)))
+    freq_map = {
+        "daily": "daily",
+        "1day": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly",
+    }
+    resample = freq_map.get(str(freq or "daily").lower(), "daily")
+    try:
+        resp = requests.get(
+            f"https://api.tiingo.com/tiingo/daily/{normalized}/prices",
+            params={
+                "token": key,
+                "startDate": start_date.isoformat(),
+                "endDate": end_date.isoformat(),
+                "resampleFreq": resample,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        payload = resp.json() or []
+    except Exception as exc:
+        logger.debug("%s tiingo history failed: %s", normalized, exc)
+        return _empty_df()
+    if not isinstance(payload, list) or not payload:
+        return _empty_df()
+    rows = []
+    for item in payload:
+        ts = pd.to_datetime(item.get("date"), errors="coerce", utc=True)
+        if pd.isna(ts):
+            continue
+        rows.append(
+            {
+                "t": ts.tz_convert(None),
+                "Open": float(item.get("open", np.nan)),
+                "High": float(item.get("high", np.nan)),
+                "Low": float(item.get("low", np.nan)),
+                "Close": float(item.get("close", np.nan)),
+                "Volume": float(item.get("volume", np.nan)),
+            }
+        )
+    if not rows:
+        return _empty_df()
+    return pd.DataFrame(rows).set_index("t").sort_index().tail(count)
 
 
 def _alpha_vantage_history(
@@ -839,22 +917,206 @@ def _library_style_bonus(plan: dict[str, Any], conclusion: dict[str, Any]) -> fl
     return round(bonus, 2)
 
 
-@lru_cache(maxsize=256)
 def _cached_company_profile(symbol: str) -> dict[str, Any]:
+    normalized = _normalize_symbol(symbol)
+    cache_state = _load_json_cache(COMPANY_PROFILE_CACHE, {"items": {}})
+    items = cache_state.get("items") or {}
+    entry = items.get(normalized)
+    fetched_at = _parse_iso_datetime((entry or {}).get("fetched_at")) if isinstance(entry, dict) else None
+    if fetched_at and (dt.datetime.now(ET) - fetched_at).total_seconds() < 86400:
+        return dict(entry.get("payload") or {})
     try:
-        return get_company_profile(_to_yfinance_symbol(symbol))
+        payload = get_company_profile(_to_yfinance_symbol(normalized))
+        if payload:
+            items[normalized] = {"fetched_at": _now_et_iso(), "payload": payload}
+            cache_state["items"] = items
+            _save_json_cache(COMPANY_PROFILE_CACHE, cache_state)
+            return payload
     except Exception as exc:
-        logger.debug("%s company profile failed: %s", symbol, exc)
-        return {}
+        logger.debug("%s company profile failed: %s", normalized, exc)
+    if entry and isinstance(entry, dict):
+        stale = dict(entry.get("payload") or {})
+        if stale:
+            stale["stale_cache"] = True
+            return stale
+    return {}
 
 
-@lru_cache(maxsize=256)
 def _cached_recent_news(symbol: str, limit: int = 3) -> list[dict[str, Any]]:
+    normalized = _normalize_symbol(symbol)
+    cache_state = _load_json_cache(RECENT_NEWS_CACHE, {"items": {}})
+    items = cache_state.get("items") or {}
+    cache_key = f"{normalized}:{int(limit)}"
+    entry = items.get(cache_key)
+    fetched_at = _parse_iso_datetime((entry or {}).get("fetched_at")) if isinstance(entry, dict) else None
+    if fetched_at and (dt.datetime.now(ET) - fetched_at).total_seconds() < 1800:
+        return list(entry.get("payload") or [])
     try:
-        return get_recent_news(_to_yfinance_symbol(symbol), limit=limit)
+        payload = get_recent_news(_to_yfinance_symbol(normalized), limit=limit)
+        if payload:
+            items[cache_key] = {"fetched_at": _now_et_iso(), "payload": payload}
+            cache_state["items"] = items
+            _save_json_cache(RECENT_NEWS_CACHE, cache_state)
+            return payload
     except Exception as exc:
-        logger.debug("%s recent news failed: %s", symbol, exc)
-        return []
+        logger.debug("%s recent news failed: %s", normalized, exc)
+    if entry and isinstance(entry, dict):
+        return list(entry.get("payload") or [])
+    return []
+
+
+def _to_et_date(value: Any) -> Optional[dt.date]:
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        if value.tzinfo:
+            return value.astimezone(ET).date()
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+    except Exception:
+        return None
+    if pd.isna(ts):
+        return None
+    if getattr(ts, "tzinfo", None):
+        return ts.tz_convert(ET).date()
+    return ts.date()
+
+
+def _earnings_timing_label(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if any(token in text for token in ("after market", "after close", "amc", "post-market")):
+        return "盘后"
+    if any(token in text for token in ("before market", "before open", "bmo", "pre-market")):
+        return "盘前"
+    return str(value).strip()
+
+
+def _build_earnings_event_payload(symbol: str, event_date: Any, timing: Any = "") -> dict[str, Any]:
+    as_of = _now_et().date()
+    normalized_date = _to_et_date(event_date)
+    if not normalized_date:
+        return {}
+    days_until = (normalized_date - as_of).days
+    timing_label = _earnings_timing_label(timing)
+    if days_until == 0:
+        label = "今天财报"
+    elif days_until > 0:
+        label = f"{days_until}天后财报"
+    else:
+        label = f"财报后第{abs(days_until)}天"
+    if timing_label:
+        label = f"{label}({timing_label})"
+    risk_level = "high" if 0 <= days_until <= 2 else "medium" if 3 <= days_until <= 7 else "normal"
+    return {
+        "symbol": _normalize_symbol(symbol),
+        "event": "earnings",
+        "date": normalized_date.isoformat(),
+        "days_until": days_until,
+        "timing": timing_label,
+        "label": label,
+        "risk_level": risk_level,
+        "updated_at": _now_et_iso(),
+    }
+
+
+def _fetch_earnings_event(symbol: str) -> dict[str, Any]:
+    normalized = _normalize_symbol(symbol)
+    cache_state = _load_json_cache(EARNINGS_EVENT_CACHE, {"items": {}})
+    items = cache_state.get("items") or {}
+    entry = items.get(normalized)
+    fetched_at = _parse_iso_datetime((entry or {}).get("fetched_at")) if isinstance(entry, dict) else None
+    if fetched_at and (dt.datetime.now(ET) - fetched_at).total_seconds() < 12 * 3600:
+        return dict(entry.get("payload") or {})
+
+    payload: dict[str, Any] = {}
+    try:
+        ticker = _yf_ticker(normalized)
+        calendar = getattr(ticker, "calendar", None)
+        if isinstance(calendar, pd.DataFrame) and not calendar.empty:
+            data_map = {}
+            if calendar.shape[1] >= 1:
+                series = calendar.iloc[:, 0]
+                data_map = {str(idx).strip().lower(): value for idx, value in series.items()}
+            event_date = data_map.get("earnings date") or data_map.get("earningsdate")
+            timing = data_map.get("earnings call time") or data_map.get("earnings call time*") or data_map.get("earnings_time")
+            payload = _build_earnings_event_payload(normalized, event_date, timing)
+        elif isinstance(calendar, dict):
+            payload = _build_earnings_event_payload(
+                normalized,
+                calendar.get("Earnings Date") or calendar.get("earningsDate"),
+                calendar.get("Earnings Call Time") or calendar.get("earningsCallTime"),
+            )
+        if not payload:
+            try:
+                earnings_dates = ticker.get_earnings_dates(limit=4)
+            except Exception:
+                earnings_dates = pd.DataFrame()
+            if isinstance(earnings_dates, pd.DataFrame) and not earnings_dates.empty:
+                first_index = earnings_dates.index[0]
+                timing = ""
+                if "Earnings Date" in earnings_dates.columns:
+                    first_index = earnings_dates.iloc[0].get("Earnings Date") or first_index
+                payload = _build_earnings_event_payload(normalized, first_index, timing)
+    except Exception as exc:
+        logger.debug("%s earnings event fetch failed: %s", normalized, exc)
+
+    if payload:
+        items[normalized] = {"fetched_at": _now_et_iso(), "payload": payload}
+        cache_state["items"] = items
+        _save_json_cache(EARNINGS_EVENT_CACHE, cache_state)
+        return payload
+    if entry and isinstance(entry, dict):
+        stale = dict(entry.get("payload") or {})
+        if stale:
+            stale["stale_cache"] = True
+            return stale
+    return {}
+
+
+def _trade_action_brief(
+    plan: dict[str, Any] | None,
+    row: dict[str, Any] | None = None,
+    earnings_event: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    plan = plan if isinstance(plan, dict) else {}
+    row = row if isinstance(row, dict) else {}
+    earnings_event = earnings_event if isinstance(earnings_event, dict) else {}
+    spread_pct = _num(plan.get("spread_pct"), _num(row.get("spread_pct")))
+    rr = _num(plan.get("risk_reward"), _num(row.get("rr")))
+    setup_confidence = _num(plan.get("setup_confidence"), _num(row.get("setup_confidence")))
+    event_label = str(earnings_event.get("label") or "").strip()
+    days_until = int(_num(earnings_event.get("days_until"), 999))
+    source_bucket = _source_bucket_from_value(row.get("source_bucket") or plan.get("source_bucket") or row.get("source") or plan.get("source"))
+
+    action = "观察"
+    reason = "信号存在，但还没到最优执行位"
+    if event_label and 0 <= days_until <= 2:
+        if spread_pct > 12 or setup_confidence < 50:
+            action = "等财报后"
+            reason = "事件前价差或确定性不划算"
+        elif source_bucket == "unusual" and rr >= 2.0 and spread_pct <= 10:
+            action = "轻仓事件单"
+            reason = "有异常流支持，但只适合快进快出"
+        else:
+            action = "只观察"
+            reason = "财报前 IV 和跳空风险偏高"
+    elif spread_pct > 18:
+        action = "回避"
+        reason = "价差偏宽，执行成本太高"
+    elif setup_confidence >= 60 and rr >= 2.0 and spread_pct <= 10:
+        action = "可执行"
+        reason = "结构清晰，盈亏比和流动性都过关"
+    elif setup_confidence >= 50 and rr >= 1.6:
+        action = "跟踪触发"
+        reason = "等确认位再进更合理"
+
+    summary = action if not event_label else f"{action} | {event_label}"
+    return {"action": action, "reason": reason, "summary": summary}
 
 
 def _tech_bias_cn(value: str) -> str:
@@ -890,6 +1152,8 @@ def _top50_reason_cn(
     sim_bonus: float = 0.0,
     profile: dict[str, Any] | None = None,
     news_items: list[dict[str, Any]] | None = None,
+    forward_context: dict[str, Any] | None = None,
+    earnings_event: dict[str, Any] | None = None,
 ) -> str:
     profile = profile or {}
     news_items = news_items or []
@@ -990,6 +1254,21 @@ def _top50_reason_cn(
         headline = str(news_items[0].get("title") or "").strip()
         if headline:
             parts.append(f"近期新闻：{headline}")
+    earnings_event = earnings_event or {}
+    if earnings_event.get("label"):
+        parts.append(f"事件风险：{earnings_event.get('label')}")
+
+    forward_context = forward_context or {}
+    if forward_context.get("available"):
+        bonus = forward_context.get("bonus")
+        summary = str(forward_context.get("summary") or "").strip()
+        if bonus is not None:
+            try:
+                parts.append(f"盘中前瞻分 {float(bonus):+.2f}")
+            except Exception:
+                pass
+        if summary:
+            parts.append(f"盘中状态 {summary}")
 
     # 保留简洁，但给出明确的结论句。
     return f"{name}：{'；'.join(parts)}"
@@ -1288,6 +1567,7 @@ def _longbridge_market_temperature(market: str = "US") -> Optional[dict]:
 
 
 def _longbridge_option_quotes(symbols: list[str]) -> dict[str, Any]:
+    global LONGBRIDGE_OPTION_RATE_LIMIT_UNTIL
     ctx = _lb_ctx()
     if ctx is None or not symbols:
         return {}
@@ -1299,6 +1579,20 @@ def _longbridge_option_quotes(symbols: list[str]) -> dict[str, Any]:
         seen.add(symbol)
         unique_symbols.append(symbol)
 
+    now_utc = _utc_now()
+    with OPTION_QUOTE_LOCK:
+        cached_hits = {
+            symbol: item.get("quote")
+            for symbol in unique_symbols
+            for item in [OPTION_QUOTE_CACHE.get(symbol) or {}]
+            if item.get("quote") is not None
+            and _parse_utc_datetime(item.get("fetched_at"))
+            and (now_utc - _parse_utc_datetime(item.get("fetched_at"))).total_seconds() <= LONGBRIDGE_OPTION_QUOTE_CACHE_SECONDS
+        }
+        rate_limited_until = LONGBRIDGE_OPTION_RATE_LIMIT_UNTIL
+    if rate_limited_until and now_utc < rate_limited_until:
+        return cached_hits
+
     out: dict[str, Any] = {}
     for chunk in _chunked(unique_symbols, LONGBRIDGE_OPTION_QUOTE_CHUNK):
         try:
@@ -1307,27 +1601,33 @@ def _longbridge_option_quotes(symbols: list[str]) -> dict[str, Any]:
                 key = getattr(quote, "symbol", "")
                 if key:
                     out[key] = quote
+            if quotes:
+                with OPTION_QUOTE_LOCK:
+                    for key, quote in out.items():
+                        OPTION_QUOTE_CACHE[key] = {"quote": quote, "fetched_at": now_utc.isoformat()}
+                    LONGBRIDGE_OPTION_RATE_LIMIT_UNTIL = None
         except Exception as exc:
+            message = str(exc)
+            if "301607" in message:
+                with OPTION_QUOTE_LOCK:
+                    LONGBRIDGE_OPTION_RATE_LIMIT_UNTIL = now_utc + dt.timedelta(seconds=LONGBRIDGE_OPTION_RATE_LIMIT_COOLDOWN_SECONDS)
+                logger.warning("Longbridge option_quote rate-limited; entering cooldown %ss", LONGBRIDGE_OPTION_RATE_LIMIT_COOLDOWN_SECONDS)
+                break
             logger.warning("Longbridge option_quote failed for chunk(size=%s): %s", len(chunk), exc)
-    return out
+    if out:
+        return out
+    return cached_hits
 
 
 def _longbridge_option_depth(symbol: str) -> tuple[Optional[float], Optional[float]]:
-    ctx = _lb_ctx()
-    if ctx is None:
+    if not symbol:
         return None, None
-    try:
-        depth = ctx.depth(symbol)
-        bid = None
-        ask = None
-        if getattr(depth, "bids", None):
-            bid = getattr(depth.bids[0], "price", None)
-        if getattr(depth, "asks", None):
-            ask = getattr(depth.asks[0], "price", None)
-        return _safe(bid), _safe(ask)
-    except Exception as exc:
-        logger.warning("Longbridge depth failed for %s: %s", symbol, exc)
+    quotes = _longbridge_option_quotes([str(symbol)])
+    quote = quotes.get(str(symbol))
+    if quote is None:
         return None, None
+    snapshot = _extract_option_mark_from_quote(quote)
+    return snapshot.get("bid"), snapshot.get("ask")
 
 
 def _chunked(seq: list[str], size: int = 80):
@@ -1544,6 +1844,12 @@ def _default_sim_state() -> dict[str, Any]:
             "min_risk_reward": SIM_AUTO_MIN_RR,
             "max_spread_pct": SIM_AUTO_MAX_SPREAD_PCT,
             "max_hold_days": SIM_AUTO_MAX_HOLD_DAYS,
+            "disabled_until": None,
+            "risk_guard_reason": None,
+            "risk_guard_set_at": None,
+            "risk_guard_hit_count": 0,
+            "last_candidate_summary": None,
+            "last_feedback_summary": [],
         },
     }
 
@@ -1655,7 +1961,51 @@ def _default_strategy_distillate() -> dict[str, Any]:
         "winner_symbols": [],
         "pending_signals": [],
         "pending_forecasts": [],
+        "recent_feedback": [],
+        "feedback_summary": [],
+        "market_heat": {
+            "updated_at": None,
+            "sector_line": "",
+            "news_line": "",
+            "flow_line": "",
+            "top_sectors": [],
+            "top_news": [],
+        },
+        "official_context": {
+            "updated_at": None,
+            "macro": [],
+            "filings": [],
+            "macro_line": "",
+            "filing_line": "",
+        },
         "raw_summary": "",
+    }
+
+
+def _default_market_heat() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "session": "premarket_5h",
+        "method": "derived",
+        "top_sectors": [],
+        "top_news": [],
+        "top_flows": [],
+        "sector_line": "",
+        "news_line": "",
+        "flow_line": "",
+        "summary_lines": [],
+        "cached_at": None,
+    }
+
+
+def _default_official_context() -> dict[str, Any]:
+    return {
+        "updated_at": None,
+        "macro": [],
+        "filings": [],
+        "macro_line": "",
+        "filing_line": "",
+        "summary_lines": [],
     }
 
 
@@ -1675,7 +2025,20 @@ def _load_sim_state() -> dict[str, Any]:
             return payload
         except Exception as exc:
             logger.warning("sim state load failed: %s", exc)
-            return _default_sim_state()
+            try:
+                broken_name = f"sim_state.broken.{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                SIM_TRADING_STATE.replace(SIM_TRADING_STATE.with_name(broken_name))
+            except Exception:
+                pass
+            default_state = _default_sim_state()
+            try:
+                SIM_TRADING_STATE.write_text(
+                    json.dumps(default_state, ensure_ascii=False, indent=2, default=_iso_timestamp),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+            return default_state
 
 
 def _save_sim_state(state: dict[str, Any]) -> None:
@@ -1791,11 +2154,7 @@ def _load_strategy_distillate() -> dict[str, Any]:
         return _default_strategy_distillate()
     try:
         payload = json.loads(STRATEGY_DISTILLATE_FILE.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            return _default_strategy_distillate()
-        base = _default_strategy_distillate()
-        base.update(payload)
-        return base
+        return _normalize_strategy_distillate_payload(payload)
     except Exception as exc:
         logger.warning("strategy distillate load failed: %s", exc)
         return _default_strategy_distillate()
@@ -1806,6 +2165,22 @@ def _save_strategy_distillate(state: dict[str, Any]) -> None:
         json.dumps(state, ensure_ascii=False, indent=2, default=_iso_timestamp),
         encoding="utf-8",
     )
+
+
+def _load_market_heat() -> dict[str, Any]:
+    return _normalize_market_heat_payload(_load_json_cache(MARKET_HEAT_FILE, _default_market_heat()))
+
+
+def _save_market_heat(payload: dict[str, Any]) -> None:
+    _save_json_cache(MARKET_HEAT_FILE, payload)
+
+
+def _load_official_context() -> dict[str, Any]:
+    return _normalize_official_context_payload(_load_json_cache(OFFICIAL_CONTEXT_CACHE, _default_official_context()))
+
+
+def _save_official_context(payload: dict[str, Any]) -> None:
+    _save_json_cache(OFFICIAL_CONTEXT_CACHE, payload)
 
 
 def _enqueue_sim_close_all(scope: str, note: str, reason: str) -> dict[str, Any]:
@@ -1860,6 +2235,12 @@ def _run_sim_close_all(scope: str, note: str, reason: str) -> dict[str, Any]:
             logger.warning("bulk sim close failed: %s", exc)
     state["updated_at"] = _now_et_iso()
     _save_sim_state(state)
+    distillate = _record_closed_trade_feedback(closed_trades, refresh_learning=bool(closed_trades))
+    if closed_trades:
+        state.setdefault("auto", {})
+        state["auto"]["last_feedback_summary"] = (distillate.get("feedback_summary") or [])[:4]
+        state["updated_at"] = _now_et_iso()
+        _save_sim_state(state)
     if closed_trades:
         try:
             lines = [f"模拟仓一键平仓 | {scope} | 共 {len(closed_trades)} 笔"]
@@ -1872,7 +2253,7 @@ def _run_sim_close_all(scope: str, note: str, reason: str) -> dict[str, Any]:
             _queue_markdown_message("\n".join(lines))
         except Exception as exc:
             logger.debug("bulk sim close push failed: %s", exc)
-    return {"closed": closed_trades, "summary": _summarize_sim_state(state), "scope": scope, "count": len(closed_trades)}
+    return {"closed": closed_trades, "summary": _summarize_sim_state(state), "scope": scope, "count": len(closed_trades), "strategy_distillate": distillate}
 
 
 def _process_pending_sim_commands() -> None:
@@ -1948,6 +2329,180 @@ def _load_json_cache(path: Path, default: dict[str, Any]) -> dict[str, Any]:
 
 def _save_json_cache(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_iso_timestamp), encoding="utf-8")
+
+
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(text)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return dict(parsed)
+    return {}
+
+
+def _coerce_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(text)
+            except Exception:
+                continue
+            if isinstance(parsed, (list, tuple)):
+                return list(parsed)
+    return []
+
+
+def _focus_profile_symbol_list(profile: Any) -> list[str]:
+    if not isinstance(profile, dict):
+        return []
+    out: list[str] = []
+    for item in profile.get("focus_symbols") or []:
+        symbol = item.get("symbol") if isinstance(item, dict) else item
+        normalized = _normalize_focus_symbol(str(symbol or ""))
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def _normalize_market_heat_payload(payload: Any) -> dict[str, Any]:
+    base = _default_market_heat()
+    raw = _coerce_mapping(payload)
+    base.update(raw)
+    top_sectors: list[dict[str, Any]] = []
+    for item in _coerce_list(base.get("top_sectors")):
+        row = _coerce_mapping(item)
+        if not row:
+            continue
+        row["leaders"] = [_coerce_mapping(lead) for lead in _coerce_list(row.get("leaders")) if _coerce_mapping(lead)]
+        row["headlines"] = [str(headline) for headline in _coerce_list(row.get("headlines")) if str(headline).strip()]
+        top_sectors.append(row)
+    top_news = [_coerce_mapping(item) for item in _coerce_list(base.get("top_news")) if _coerce_mapping(item)]
+    top_flows: list[dict[str, Any]] = []
+    for item in _coerce_list(base.get("top_flows")):
+        row = _coerce_mapping(item)
+        if not row:
+            continue
+        row["leaders"] = [_coerce_mapping(lead) for lead in _coerce_list(row.get("leaders")) if _coerce_mapping(lead)]
+        top_flows.append(row)
+    base["top_sectors"] = top_sectors
+    base["top_news"] = top_news
+    base["top_flows"] = top_flows
+    base["summary_lines"] = [str(line) for line in _coerce_list(base.get("summary_lines")) if str(line).strip()]
+    return base
+
+
+def _normalize_official_context_payload(payload: Any) -> dict[str, Any]:
+    base = _default_official_context()
+    raw = _coerce_mapping(payload)
+    base.update(raw)
+    for key in ("macro", "filings", "summary_lines"):
+        base[key] = [item for item in _coerce_list(base.get(key)) if item]
+    return base
+
+
+def _normalize_strategy_distillate_payload(payload: Any) -> dict[str, Any]:
+    base = _default_strategy_distillate()
+    raw = _coerce_mapping(payload)
+    base.update(raw)
+    for key in ("essence", "playbook", "avoid", "feedback_summary"):
+        base[key] = [str(item) for item in _coerce_list(base.get(key)) if str(item).strip()]
+    focus_symbols: list[dict[str, Any]] = []
+    for item in _coerce_list(base.get("focus_symbols")):
+        if isinstance(item, dict):
+            symbol = _normalize_focus_symbol(str(item.get("symbol") or ""))
+            if symbol:
+                focus_symbols.append({"symbol": symbol, "reason": str(item.get("reason") or "").strip()})
+        else:
+            symbol = _normalize_focus_symbol(str(item or ""))
+            if symbol:
+                focus_symbols.append({"symbol": symbol, "reason": ""})
+    base["focus_symbols"] = focus_symbols
+    for key in ("source_bias", "factor_bias", "environment_bias", "winner_symbols", "pending_signals", "pending_forecasts", "recent_feedback"):
+        base[key] = [_coerce_mapping(item) for item in _coerce_list(base.get(key)) if _coerce_mapping(item)]
+    base["market_heat"] = _normalize_market_heat_payload(base.get("market_heat"))
+    base["official_context"] = _normalize_official_context_payload(base.get("official_context"))
+    return base
+
+
+def _normalize_user_focus_profile(payload: Any) -> dict[str, Any]:
+    base = _default_user_focus_profile()
+    raw = _coerce_mapping(payload)
+    base.update(raw)
+    entries: list[dict[str, Any]] = []
+    for item in _coerce_list(base.get("entries")):
+        row = _coerce_mapping(item)
+        symbol = _normalize_focus_symbol(str(row.get("symbol") or ""))
+        if not symbol:
+            continue
+        entries.append(
+            {
+                "date": str(row.get("date") or ""),
+                "symbol": symbol,
+                "cluster": str(row.get("cluster") or _focus_cluster(symbol)),
+                "reason": str(row.get("reason") or _focus_symbol_reason(symbol)),
+            }
+        )
+    base["entries"] = entries
+    base["focus_symbols"] = _focus_profile_symbol_list(base)
+    base["symbol_weights"] = _coerce_mapping(base.get("symbol_weights"))
+    base["cluster_weights"] = _coerce_mapping(base.get("cluster_weights"))
+    base["top_clusters"] = [_coerce_mapping(item) for item in _coerce_list(base.get("top_clusters")) if _coerce_mapping(item)]
+    reasons = _coerce_mapping(base.get("symbol_reasons"))
+    for item in entries:
+        reasons.setdefault(item["symbol"], item["reason"])
+    base["symbol_reasons"] = reasons
+    base["summary"] = [str(line) for line in _coerce_list(base.get("summary")) if str(line).strip()]
+    base["summary_line"] = str(base.get("summary_line") or "；".join(base["summary"][:2]))
+    return base
+
+
+def _normalize_scan_row_payload(item: Any) -> dict[str, Any]:
+    row = _coerce_mapping(item)
+    if not row:
+        return {}
+    row["best_plan"] = _coerce_mapping(row.get("best_plan"))
+    row["contract"] = _coerce_mapping(row.get("contract")) if not isinstance(row.get("contract"), str) else row.get("contract")
+    return row
+
+
+def _normalize_scan_cache_payload(payload: Any) -> dict[str, Any]:
+    raw = _coerce_mapping(payload)
+    if not raw:
+        return {}
+    raw["rows"] = [_normalize_scan_row_payload(item) for item in _coerce_list(raw.get("rows")) if _normalize_scan_row_payload(item)]
+    return raw
+
+
+def _decorate_scan_row_event_context(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    symbol = _normalize_symbol(row.get("symbol") or "")
+    plan = row.get("best_plan") if isinstance(row.get("best_plan"), dict) else {}
+    if not symbol or not plan:
+        return row
+    earnings_event = row.get("earnings_event") if isinstance(row.get("earnings_event"), dict) else {}
+    if not earnings_event:
+        earnings_event = _fetch_earnings_event(symbol)
+        row["earnings_event"] = earnings_event
+    row["action_brief"] = _trade_action_brief(plan, row, earnings_event)
+    if row.get("analysis_cn") and row["action_brief"].get("summary") and "建议 " not in str(row.get("analysis_cn")):
+        row["analysis_cn"] = f"{row.get('analysis_cn')}，建议 {row['action_brief']['summary']}"
+    return row
 
 
 def _winner_profile_default() -> dict[str, Any]:
@@ -2072,10 +2627,10 @@ def _default_user_focus_profile() -> dict[str, Any]:
 
 def _load_user_focus_profile(force_refresh: bool = False) -> dict[str, Any]:
     if not force_refresh:
-        cached = _load_json_cache(USER_FOCUS_CACHE, _default_user_focus_profile())
+        cached = _normalize_user_focus_profile(_load_json_cache(USER_FOCUS_CACHE, _default_user_focus_profile()))
         if cached.get("updated_at") and cached.get("focus_symbols"):
             return cached
-    profile = _default_user_focus_profile()
+    profile = _normalize_user_focus_profile(_default_user_focus_profile())
     profile["updated_at"] = _now_et_iso()
     _save_json_cache(USER_FOCUS_CACHE, profile)
     return profile
@@ -2305,6 +2860,83 @@ def _session_item_label(item: dict[str, Any]) -> str:
     return " ".join(parts) if parts else symbol or "UNKNOWN"
 
 
+def _session_action_label(item: dict[str, Any]) -> str:
+    symbol = _normalize_symbol(item.get("symbol") or "")
+    action_brief = item.get("action_brief") if isinstance(item.get("action_brief"), dict) else {}
+    if not action_brief:
+        action_brief = _trade_action_brief(
+            item.get("best_plan") if isinstance(item.get("best_plan"), dict) else {},
+            item,
+            item.get("earnings_event") if isinstance(item.get("earnings_event"), dict) else {},
+        )
+    summary = str(action_brief.get("summary") or action_brief.get("action") or "").strip()
+    return f"{symbol} {summary}".strip()
+
+
+def _action_priority(action: str) -> int:
+    mapping = {
+        "可执行": 4,
+        "轻仓事件单": 3,
+        "跟踪触发": 2,
+        "观察": 1,
+        "只观察": 0,
+        "等财报后": 0,
+        "回避": -1,
+    }
+    return mapping.get(str(action or "").strip(), 0)
+
+
+def _is_pushworthy_candidate(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    action_brief = item.get("action_brief") if isinstance(item.get("action_brief"), dict) else {}
+    action = str(action_brief.get("action") or "").strip()
+    if _action_priority(action) < 2:
+        return False
+    setup_confidence = _num(item.get("setup_confidence"))
+    combined_score = _num(item.get("combined_score"), _num(item.get("final_score")))
+    spread_pct = _num((item.get("best_plan") or {}).get("spread_pct"), _num(item.get("spread_pct")))
+    if action == "跟踪触发" and setup_confidence < 50:
+        return False
+    if action in {"可执行", "轻仓事件单"} and setup_confidence < 55:
+        return False
+    if combined_score < 72 and action == "跟踪触发":
+        return False
+    if spread_pct > 18:
+        return False
+    return True
+
+
+def _session_recommended_candidates(rows: list[dict[str, Any]], limit: int = SESSION_RECOMMENDATION_LIMIT) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for item in (rows or []):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if not isinstance(row.get("earnings_event"), dict):
+            row["earnings_event"] = {}
+        if not row.get("earnings_event") and row.get("symbol"):
+            row["earnings_event"] = _fetch_earnings_event(str(row.get("symbol") or ""))
+        if not isinstance(row.get("action_brief"), dict) or not row.get("action_brief"):
+            row["action_brief"] = _trade_action_brief(
+                row.get("best_plan") if isinstance(row.get("best_plan"), dict) else {},
+                row,
+                row.get("earnings_event") if isinstance(row.get("earnings_event"), dict) else {},
+            )
+        prepared.append(row)
+    filtered = [item for item in prepared if _is_pushworthy_candidate(item)]
+    filtered.sort(
+        key=lambda item: (
+            _action_priority(str(((item.get("action_brief") or {}) if isinstance(item.get("action_brief"), dict) else {}).get("action") or "")),
+            _num(item.get("setup_confidence")),
+            _num(item.get("combined_score"), _num(item.get("final_score"))),
+            len(item.get("source_mix") or []),
+        ),
+        reverse=True,
+    )
+    return filtered[: max(1, int(limit or SESSION_RECOMMENDATION_LIMIT))]
+
+
 def _session_change_signature(rows: list[dict[str, Any]], limit: int = 5) -> str:
     keys: list[str] = []
     for item in (rows or [])[:limit]:
@@ -2314,13 +2946,39 @@ def _session_change_signature(rows: list[dict[str, Any]], limit: int = 5) -> str
     return hashlib.sha256("||".join(keys).encode("utf-8")).hexdigest() if keys else ""
 
 
+def _market_heat_signature(market_heat: dict[str, Any] | None, limit: int = 3) -> str:
+    market_heat = market_heat or {}
+    sector_parts: list[str] = []
+    for item in (market_heat.get("top_sectors") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        sector = str(item.get("sector") or "").strip()
+        flow_state = str(item.get("flow_state") or "").strip()
+        heat_score = round(_num(item.get("heat_score")), 1)
+        if sector:
+            sector_parts.append(f"{sector}|{flow_state}|{heat_score}")
+    news_parts: list[str] = []
+    for item in (market_heat.get("top_news") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        headline = str(item.get("headline") or item.get("title") or "").strip()
+        symbol = str(item.get("symbol") or "").strip()
+        sector = str(item.get("sector") or "").strip()
+        if headline:
+            news_parts.append(f"{sector}|{symbol}|{headline}")
+    joined = "||".join(sector_parts + ["###"] + news_parts)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest() if joined else ""
+
+
 def _session_change_summary(payload: dict[str, Any], previous: dict[str, Any] | None = None) -> str:
     previous = previous or {}
-    top_rows = payload.get("top_candidates") or []
+    top_rows = payload.get("recommended_candidates") or payload.get("top_candidates") or []
     unusual_rows = (payload.get("unusual") or {}).get("rows") or []
-    prev_top = previous.get("top_candidates") or []
+    prev_top = previous.get("recommended_candidates") or previous.get("top_candidates") or []
     prev_unusual = (previous.get("unusual") or {}).get("rows") or []
     distillate = payload.get("strategy_distillate") or {}
+    market_heat = payload.get("market_heat") or {}
+    prev_market_heat = previous.get("market_heat") or {}
 
     cur_top_rows = top_rows[:5]
     prev_top_rows = prev_top[:5]
@@ -2351,10 +3009,10 @@ def _session_change_summary(payload: dict[str, Any], previous: dict[str, Any] | 
             moved_down.append(f"{key} ↓{abs(delta)}")
 
     lines = [
-        "### 盘中变化更新",
+        "### 推荐更新",
         f"- 时间：{payload.get('timestamp') or _now_et_iso()}",
         f"- 会话：{payload.get('session') or 'session'}",
-        f"- Top50：{', '.join(_session_item_label(item) for item in cur_top_rows) or '暂无'}",
+        f"- 推荐单：{', '.join(_session_item_label(item) for item in cur_top_rows) or '暂无'}",
         f"- 异常：{', '.join(_session_item_label(item) for item in cur_unusual_rows) or '暂无'}",
     ]
     if distillate.get("essence"):
@@ -2367,24 +3025,87 @@ def _session_change_summary(payload: dict[str, Any], previous: dict[str, Any] | 
         ]
         if focus_symbols:
             lines.append(f"- 蒸馏关注：{', '.join(focus_symbols)}")
+    action_labels = [_session_action_label(item) for item in cur_top_rows[:3] if _session_action_label(item)]
+    if action_labels:
+        lines.append(f"- 执行建议：{'；'.join(action_labels)}")
     if top_added or top_removed:
-        lines.append(f"- Top50 变化：新增 {', '.join(top_added[:3]) or '无'}；移出 {', '.join(top_removed[:3]) or '无'}")
+        lines.append(f"- 推荐变化：新增 {', '.join(top_added[:3]) or '无'}；移出 {', '.join(top_removed[:3]) or '无'}")
     if moved_up or moved_down:
-        lines.append(f"- Top50 排名：上升 {', '.join(moved_up[:3]) or '无'}；下降 {', '.join(moved_down[:3]) or '无'}")
+        lines.append(f"- 推荐排序：上升 {', '.join(moved_up[:3]) or '无'}；下降 {', '.join(moved_down[:3]) or '无'}")
     if unusual_added or unusual_removed:
         lines.append(f"- 异常变化：新增 {', '.join(unusual_added[:3]) or '无'}；移出 {', '.join(unusual_removed[:3]) or '无'}")
+
+    prev_sector_map = {
+        str(item.get("sector") or "").strip(): item
+        for item in (prev_market_heat.get("top_sectors") or [])[:4]
+        if isinstance(item, dict) and item.get("sector")
+    }
+    sector_updates: list[str] = []
+    for item in (market_heat.get("top_sectors") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        sector = str(item.get("sector") or "").strip()
+        if not sector:
+            continue
+        prev_item = prev_sector_map.get(sector)
+        current_heat = round(_num(item.get("heat_score")), 1)
+        previous_heat = round(_num((prev_item or {}).get("heat_score")), 1) if prev_item else 0.0
+        delta = current_heat - previous_heat
+        if not prev_item:
+            sector_updates.append(f"{sector} 新增")
+        elif delta >= 1.2:
+            sector_updates.append(f"{sector} 升温 +{delta:.1f}")
+        elif delta <= -1.2:
+            sector_updates.append(f"{sector} 降温 {delta:.1f}")
+    if sector_updates:
+        lines.append(f"- 热点板块：{'；'.join(sector_updates[:3])}")
+
+    previous_news_keys = {
+        f"{str(item.get('sector') or '').strip()}|{str(item.get('symbol') or '').strip()}|{str(item.get('headline') or item.get('title') or '').strip()}"
+        for item in (prev_market_heat.get("top_news") or [])[:6]
+        if isinstance(item, dict) and (item.get("headline") or item.get("title"))
+    }
+    new_heat_news: list[str] = []
+    for item in (market_heat.get("top_news") or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+        headline = str(item.get("headline") or item.get("title") or "").strip()
+        if not headline:
+            continue
+        key = f"{str(item.get('sector') or '').strip()}|{str(item.get('symbol') or '').strip()}|{headline}"
+        if key not in previous_news_keys:
+            tag = " | ".join(
+                part
+                for part in [
+                    str(item.get("sector") or "").strip(),
+                    str(item.get("symbol") or "").strip(),
+                ]
+                if part
+            )
+            new_heat_news.append(f"{tag}: {headline}" if tag else headline)
+    if new_heat_news:
+        lines.append(f"- 新热点新闻：{'；'.join(new_heat_news[:2])}")
     return "\n".join(lines)
 
 
-def _maybe_push_session_delta(session_key: str, payload: dict[str, Any]) -> bool:
+def _maybe_push_session_delta(session_key: str, payload: dict[str, Any], previous: dict[str, Any] | None = None) -> bool:
     if not session_key.startswith("premarket"):
         return False
     if not payload.get("scan_window_open"):
         return False
     state = _load_session_screen_state()
-    snapshots = state.get("snapshots", {}) if isinstance(state.get("snapshots"), dict) else {}
-    previous = snapshots.get(session_key, {}) if isinstance(snapshots.get(session_key), dict) else {}
-    current_sig = _session_change_signature(payload.get("top_candidates") or []) + "|" + _session_change_signature((payload.get("unusual") or {}).get("rows") or [])
+    previous = previous if isinstance(previous, dict) else {}
+    current_push_rows = payload.get("recommended_candidates") or _session_recommended_candidates(payload.get("top_candidates") or [])
+    prev_push_rows = previous.get("recommended_candidates") or _session_recommended_candidates(previous.get("top_candidates") or [])
+    if not current_push_rows and not prev_push_rows:
+        return False
+    current_sig = (
+        _session_change_signature(current_push_rows)
+        + "|"
+        + _session_change_signature((payload.get("unusual") or {}).get("rows") or [])
+        + "|"
+        + _market_heat_signature(payload.get("market_heat") or {})
+    )
     current_date = str(payload.get("timestamp") or "").split("T", 1)[0] or _now_et().date().isoformat()
     current_sig = f"{current_date}|{current_sig}"
     if not current_sig or current_sig == str(state.get("last_push_signature", {}).get(session_key) or ""):
@@ -2549,8 +3270,506 @@ def _strategy_distillate_lines(payload: dict[str, Any]) -> list[str]:
             ]
             or ["- none"]
         ),
+        "",
+        "## Feedback Summary",
+        *([f"- {line}" for line in (payload.get("feedback_summary") or [])] or ["- none"]),
+        "",
+        "## Recent Feedback",
+        *(
+            [
+                f"- {item.get('timestamp')}: {item.get('symbol')} {item.get('option_type')} {item.get('outcome')} pnl={item.get('pnl_pct')}% | {item.get('lesson')} | next={item.get('next_action')}"
+                for item in (payload.get("recent_feedback") or [])[:10]
+            ]
+            or ["- none"]
+        ),
+        "",
+        "## Market Heat",
+        *(
+            [
+                f"- {item}"
+                for item in (payload.get("market_heat", {}).get("summary_lines") or [])[:6]
+            ]
+            or ["- none"]
+        ),
+        "",
+        "## Official Context",
+        *(
+            [
+                f"- {item}"
+                for item in (payload.get("official_context", {}).get("summary_lines") or [])[:6]
+            ]
+            or ["- none"]
+        ),
     ]
     return lines
+
+
+def _market_heat_cache_age_seconds(payload: dict[str, Any]) -> float | None:
+    updated_at = _parse_iso_datetime(payload.get("updated_at"))
+    if not updated_at:
+        return None
+    return max(0.0, (dt.datetime.now(ET) - updated_at).total_seconds())
+
+
+def _sec_request_headers() -> dict[str, str]:
+    return {
+        "User-Agent": "PythonProject10/1.0 research-bot contact admin@example.com",
+        "Accept-Encoding": "gzip, deflate",
+        "Host": "data.sec.gov",
+    }
+
+
+def _fred_series_latest(series_id: str) -> dict[str, Any]:
+    if not FRED_API_KEY:
+        return {}
+    try:
+        resp = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={
+                "series_id": series_id,
+                "api_key": FRED_API_KEY,
+                "file_type": "json",
+                "sort_order": "desc",
+                "limit": 2,
+            },
+            timeout=12,
+        )
+        resp.raise_for_status()
+        payload = resp.json() or {}
+        rows = payload.get("observations") or []
+        if not rows:
+            return {}
+        latest = rows[0]
+        previous = rows[1] if len(rows) > 1 else {}
+        latest_value = latest.get("value")
+        prev_value = previous.get("value")
+        try:
+            latest_value = float(latest_value)
+        except Exception:
+            latest_value = None
+        try:
+            prev_value = float(prev_value)
+        except Exception:
+            prev_value = None
+        delta = (latest_value - prev_value) if latest_value is not None and prev_value is not None else None
+        return {
+            "series_id": series_id,
+            "date": latest.get("date"),
+            "value": latest_value,
+            "previous": prev_value,
+            "delta": delta,
+        }
+    except Exception as exc:
+        logger.debug("FRED %s fetch failed: %s", series_id, exc)
+        return {}
+
+
+def _sec_ticker_map() -> dict[str, dict[str, Any]]:
+    cached = _load_json_cache(OFFICIAL_CONTEXT_CACHE, _default_official_context())
+    ticker_map = cached.get("sec_ticker_map")
+    fetched_at = _parse_iso_datetime(cached.get("sec_ticker_map_updated_at"))
+    if isinstance(ticker_map, dict) and fetched_at and (dt.datetime.now(ET) - fetched_at).total_seconds() < 86400:
+        return ticker_map
+    try:
+        resp = requests.get("https://www.sec.gov/files/company_tickers.json", headers=_sec_request_headers(), timeout=12)
+        resp.raise_for_status()
+        payload = resp.json() or {}
+        resolved: dict[str, dict[str, Any]] = {}
+        for item in payload.values() if isinstance(payload, dict) else []:
+            ticker = str(item.get("ticker") or "").upper().strip()
+            if not ticker:
+                continue
+            resolved[ticker] = {
+                "cik": str(item.get("cik_str") or "").zfill(10),
+                "title": item.get("title"),
+            }
+        cached["sec_ticker_map"] = resolved
+        cached["sec_ticker_map_updated_at"] = _now_et_iso()
+        _save_json_cache(OFFICIAL_CONTEXT_CACHE, cached)
+        return resolved
+    except Exception as exc:
+        logger.debug("SEC ticker map fetch failed: %s", exc)
+        return ticker_map if isinstance(ticker_map, dict) else {}
+
+
+def _sec_recent_filings(symbols: list[str], max_per_symbol: int = 2) -> list[dict[str, Any]]:
+    ticker_map = _sec_ticker_map()
+    filings: list[dict[str, Any]] = []
+    for symbol in symbols[:6]:
+        meta = ticker_map.get(str(symbol).upper())
+        if not meta or not meta.get("cik"):
+            continue
+        cik = meta["cik"]
+        try:
+            resp = requests.get(
+                f"https://data.sec.gov/submissions/CIK{cik}.json",
+                headers=_sec_request_headers(),
+                timeout=12,
+            )
+            resp.raise_for_status()
+            payload = resp.json() or {}
+            recent = ((payload.get("filings") or {}).get("recent") or {})
+            forms = recent.get("form") or []
+            dates = recent.get("filingDate") or []
+            accessions = recent.get("accessionNumber") or []
+            primary_docs = recent.get("primaryDocument") or []
+            added = 0
+            for form, filed_at, accession, primary_doc in zip(forms, dates, accessions, primary_docs):
+                form_text = str(form or "").upper()
+                if form_text not in {"8-K", "10-Q", "10-K"}:
+                    continue
+                filings.append(
+                    {
+                        "symbol": str(symbol).upper(),
+                        "form": form_text,
+                        "filed_at": filed_at,
+                        "accession": accession,
+                        "document": primary_doc,
+                    }
+                )
+                added += 1
+                if added >= max_per_symbol:
+                    break
+        except Exception as exc:
+            logger.debug("SEC filings fetch failed for %s: %s", symbol, exc)
+            continue
+    return filings
+
+
+def _build_official_context(force_refresh: bool = False, focus_symbols: list[str] | None = None) -> dict[str, Any]:
+    cached = _load_official_context()
+    updated_at = _parse_iso_datetime(cached.get("updated_at"))
+    if not force_refresh and updated_at and (dt.datetime.now(ET) - updated_at).total_seconds() < 1800:
+        return cached
+    focus_symbols = [str(symbol).upper() for symbol in (focus_symbols or []) if str(symbol).strip()]
+    macro: list[dict[str, Any]] = []
+    for series_id, label in (("VIXCLS", "VIX"), ("DGS10", "US10Y"), ("DFF", "FedFunds")):
+        row = _fred_series_latest(series_id)
+        if row:
+            row["label"] = label
+            macro.append(row)
+    filings = _sec_recent_filings(focus_symbols, max_per_symbol=2) if focus_symbols else []
+    macro_line = " / ".join(
+        [
+            f"{item.get('label')} {item.get('value')}{f' ({item.get('delta'):+.2f})' if item.get('delta') is not None else ''}"
+            for item in macro[:3]
+        ]
+    )
+    filing_line = " / ".join(
+        [
+            f"{item.get('symbol')} {item.get('form')} {item.get('filed_at')}"
+            for item in filings[:5]
+        ]
+    )
+    payload = {
+        "updated_at": _now_et_iso(),
+        "macro": macro,
+        "filings": filings,
+        "macro_line": macro_line,
+        "filing_line": filing_line,
+        "summary_lines": [line for line in [macro_line, filing_line] if line],
+    }
+    _save_official_context(payload)
+    return payload
+
+
+def _infer_sector_theme(symbol: str, row: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            str(row.get("name") or ""),
+            str(row.get("company_name") or ""),
+            str(row.get("reason_cn") or ""),
+            str(row.get("analysis_cn") or ""),
+            str(row.get("news_headline") or ""),
+        ]
+    ).lower()
+    theme_map = [
+        ("AI / Compute", ["ai", "gpu", "chip", "semiconductor", "data center", "compute", "nvidia", "oracle", "broadcom"]),
+        ("Cloud / Software", ["cloud", "software", "saas", "database", "cybersecurity", "enterprise", "oracle", "salesforce"]),
+        ("EV / Auto", ["ev", "electric vehicle", "tesla", "auto", "automotive", "ford"]),
+        ("Aerospace / Defense", ["rocket", "satellite", "space", "defense", "aerospace", "launch"]),
+        ("Consumer Tech", ["iphone", "ios", "consumer", "platform", "advertising", "meta", "google", "apple"]),
+        ("Finance", ["bank", "financial", "insurance", "credit", "broker"]),
+        ("Biotech / Pharma", ["biotech", "drug", "pharma", "clinical", "fda"]),
+        ("Energy", ["oil", "gas", "energy", "solar", "battery", "uranium"]),
+    ]
+    for label, keywords in theme_map:
+        if any(keyword in text for keyword in keywords):
+            return label
+    known_map = {
+        "NVDA": "AI / Compute",
+        "AMD": "AI / Compute",
+        "MU": "AI / Compute",
+        "QCOM": "AI / Compute",
+        "ORCL": "Cloud / Software",
+        "IBM": "Cloud / Software",
+        "CRWV": "AI / Compute",
+        "RKLB": "Aerospace / Defense",
+        "TSLA": "EV / Auto",
+        "F": "EV / Auto",
+        "AAPL": "Consumer Tech",
+        "META": "Consumer Tech",
+        "GOOGL": "Consumer Tech",
+        "GOOG": "Consumer Tech",
+    }
+    return known_map.get(symbol.upper(), "Unknown")
+
+
+def _build_market_heat_snapshot(force_refresh: bool = False, session_name: str = "premarket_5h") -> dict[str, Any]:
+    cached = _load_market_heat()
+    age_seconds = _market_heat_cache_age_seconds(cached)
+    if not force_refresh and age_seconds is not None and age_seconds < 600 and (cached.get("top_sectors") or cached.get("summary_lines")):
+        return cached
+
+    if force_refresh:
+        top50 = _analyze_marketcap_universe(
+            limit=18,
+            universe_size=240,
+            refresh=True,
+            use_library_bias=True,
+            cache_max_age_hours=0,
+            max_runtime_seconds=18,
+        )
+        unusual = _scan_daily_unusual_options(
+            limit=12,
+            universe_size=240,
+            refresh=True,
+            min_dte=1,
+            max_dte=45,
+            min_volume=50,
+            min_premium=25000,
+            max_symbols=12,
+            top_per_symbol=3,
+            use_library_bias=True,
+            cache_max_age_hours=0,
+            prefilter_multiplier=2.0,
+            max_runtime_seconds=18,
+        )
+    else:
+        top50 = _load_latest_nonempty_top50_cache(max_age_hours=24) or {}
+        unusual = _load_latest_nonempty_unusual_cache(max_age_hours=24) or {}
+
+    source_rows: list[tuple[str, dict[str, Any]]] = []
+    for source_name, payload in (("top50", top50), ("unusual", unusual)):
+        rows = payload.get("rows") if isinstance(payload, dict) else []
+        for row in (rows or [])[:40]:
+            if isinstance(row, dict):
+                source_rows.append((source_name, row))
+
+    symbol_map: dict[str, dict[str, Any]] = {}
+    for source_name, row in source_rows:
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        sector = str(row.get("sector") or "").strip() or "Unknown"
+        industry = str(row.get("industry") or "").strip()
+        inferred_sector = _infer_sector_theme(symbol, row) if sector == "Unknown" else sector
+        if sector == "Unknown":
+            sector = inferred_sector
+        if (sector == "Unknown" or not industry) and inferred_sector == "Unknown":
+            profile = _cached_company_profile(symbol)
+            sector = str(profile.get("sector") or sector).strip() or "Unknown"
+            industry = str(profile.get("industry") or industry).strip()
+        if sector == "Unknown":
+            sector = inferred_sector
+        score = _num(row.get("combined_score") or row.get("final_score") or row.get("score"))
+        forward_bonus = _num(row.get("forward_bonus"))
+        forward_metrics = row.get("forward_metrics") if isinstance(row.get("forward_metrics"), dict) else {}
+        change_pct = _num(row.get("change_pct"))
+        momentum = change_pct
+        momentum += _num(forward_metrics.get("day_ret_pct"))
+        momentum += _num(forward_metrics.get("short_mom_pct")) * 0.5
+        momentum += _num(forward_metrics.get("accel_pct")) * 0.25
+        money_proxy = 0.0
+        money_proxy += max(0.0, _num(row.get("quote_turnover")) / 1_000_000.0)
+        money_proxy += max(0.0, _num(row.get("premium")) / 100_000.0)
+        money_proxy += max(0.0, _num(row.get("vol_oi_ratio")) * 1.2)
+        money_proxy += max(0.0, forward_bonus) * 0.35
+        news_headline = str(row.get("news_headline") or "").strip()
+        if not news_headline:
+            news_items = _cached_recent_news(symbol, 1)
+            news_headline = str((news_items[0] if news_items else {}).get("title") or "").strip()
+        sector_entry = symbol_map.get(symbol)
+        if not sector_entry or score >= _num(sector_entry.get("score")):
+            sector_entry = {
+                "symbol": symbol,
+                "name": str(row.get("name") or row.get("company_name") or symbol),
+                "sector": sector,
+                "industry": industry,
+                "score": score,
+                "money_proxy": money_proxy,
+                "momentum_proxy": momentum,
+                "change_pct": change_pct,
+                "forward_bonus": forward_bonus,
+                "forward_summary": str(row.get("forward_summary") or ""),
+                "news_headlines": [news_headline] if news_headline else [],
+                "sources": [source_name],
+                "volume": _num(row.get("quote_volume")),
+                "turnover": _num(row.get("quote_turnover")),
+                "premium": _num(row.get("premium")),
+                "vol_oi_ratio": _num(row.get("vol_oi_ratio")),
+                "contracts": [str(row.get("contract") or "")] if row.get("contract") else [],
+                "reason": str(row.get("reason_cn") or row.get("analysis_cn") or "").strip(),
+            }
+            symbol_map[symbol] = sector_entry
+        else:
+            sector_entry["sources"] = sorted(set((sector_entry.get("sources") or []) + [source_name]))
+            sector_entry["score"] = max(_num(sector_entry.get("score")), score)
+            sector_entry["money_proxy"] += money_proxy
+            sector_entry["momentum_proxy"] += momentum
+            sector_entry["change_pct"] = change_pct if abs(change_pct) > abs(_num(sector_entry.get("change_pct"))) else sector_entry.get("change_pct")
+            sector_entry["forward_bonus"] = max(_num(sector_entry.get("forward_bonus")), forward_bonus)
+            if news_headline and news_headline not in (sector_entry.get("news_headlines") or []):
+                sector_entry.setdefault("news_headlines", []).append(news_headline)
+            contract = str(row.get("contract") or "")
+            if contract and contract not in (sector_entry.get("contracts") or []):
+                sector_entry.setdefault("contracts", []).append(contract)
+
+    if not symbol_map:
+        payload = _default_market_heat()
+        payload["updated_at"] = _now_et_iso()
+        payload["session"] = session_name
+        payload["method"] = "derived"
+        payload["cached_at"] = cached.get("updated_at")
+        _save_market_heat(payload)
+        return payload
+
+    sector_map: dict[str, dict[str, Any]] = {}
+    for rec in symbol_map.values():
+        sector = str(rec.get("sector") or "Unknown").strip() or "Unknown"
+        sector_entry = sector_map.setdefault(
+            sector,
+            {
+                "sector": sector,
+                "industry": rec.get("industry") or "",
+                "symbol_count": 0,
+                "score": 0.0,
+                "money_proxy": 0.0,
+                "momentum_proxy": 0.0,
+                "symbols": [],
+                "leaders": [],
+                "news_headlines": [],
+                "sources": [],
+            },
+        )
+        sector_entry["symbol_count"] += 1
+        sector_entry["score"] += _num(rec.get("score"))
+        sector_entry["money_proxy"] += _num(rec.get("money_proxy"))
+        sector_entry["momentum_proxy"] += _num(rec.get("momentum_proxy"))
+        sector_entry["symbols"].append(
+            {
+                "symbol": rec.get("symbol"),
+                "score": _num(rec.get("score")),
+                "change_pct": _num(rec.get("change_pct")),
+                "money_proxy": _num(rec.get("money_proxy")),
+                "forward_bonus": _num(rec.get("forward_bonus")),
+                "forward_summary": rec.get("forward_summary") or "",
+                "reason": rec.get("reason") or "",
+                "contract": (rec.get("contracts") or [""])[0],
+                "sources": rec.get("sources") or [],
+            }
+        )
+        sector_entry["leaders"] = sorted(sector_entry["symbols"], key=lambda item: (_num(item.get("score")), _num(item.get("money_proxy"))), reverse=True)[:3]
+        for headline in rec.get("news_headlines") or []:
+            if headline and headline not in sector_entry["news_headlines"]:
+                sector_entry["news_headlines"].append(headline)
+        if rec.get("sources"):
+            sector_entry["sources"] = sorted(set(sector_entry["sources"]) | set(rec.get("sources") or []))
+
+    sectors = sorted(
+        sector_map.values(),
+        key=lambda item: (
+            _num(item.get("score")) + _num(item.get("money_proxy")) * 1.4 + max(0.0, _num(item.get("momentum_proxy"))) * 0.6,
+            _num(item.get("symbol_count")),
+        ),
+        reverse=True,
+    )
+
+    top_sectors: list[dict[str, Any]] = []
+    top_news: list[dict[str, Any]] = []
+    top_flows: list[dict[str, Any]] = []
+    summary_lines: list[str] = []
+    for idx, sector in enumerate(sectors[:6], start=1):
+        score = _num(sector.get("score"))
+        money_proxy = _num(sector.get("money_proxy"))
+        momentum_proxy = _num(sector.get("momentum_proxy"))
+        symbol_count = int(sector.get("symbol_count") or 0)
+        flow_state = "资金偏强" if money_proxy >= 8 or momentum_proxy >= 1.5 else "资金平稳" if money_proxy >= 3 else "资金偏弱"
+        if momentum_proxy < 0 and money_proxy < 3:
+            flow_state = "资金回落"
+        headlines = list(sector.get("news_headlines") or [])[:3]
+        leaders = list(sector.get("leaders") or [])[:3]
+        heat_score = round(score + money_proxy * 1.4 + max(0.0, momentum_proxy) * 0.8 + len(headlines) * 1.5, 2)
+        sector_item = {
+            "rank": idx,
+            "sector": sector.get("sector"),
+            "industry": sector.get("industry"),
+            "symbol_count": symbol_count,
+            "heat_score": heat_score,
+            "score": round(score, 2),
+            "money_proxy": round(money_proxy, 2),
+            "momentum_proxy": round(momentum_proxy, 2),
+            "flow_state": flow_state,
+            "leaders": leaders,
+            "headlines": headlines,
+            "summary": f"{sector.get('sector')} · {flow_state} · {symbol_count} 只 · 热度 {heat_score:.1f}",
+        }
+        top_sectors.append(sector_item)
+        top_flows.append(
+            {
+                "rank": idx,
+                "sector": sector.get("sector"),
+                "flow_state": flow_state,
+                "heat_score": heat_score,
+                "money_proxy": round(money_proxy, 2),
+                "momentum_proxy": round(momentum_proxy, 2),
+                "net_flow_label": f"资金分 {money_proxy:.1f} | 动量分 {momentum_proxy:.1f}",
+                "leaders": leaders,
+            }
+        )
+        if headlines:
+            top_news.append(
+                {
+                    "sector": sector.get("sector"),
+                    "symbol": leaders[0]["symbol"] if leaders else "",
+                    "headline": headlines[0],
+                    "flow_state": flow_state,
+                }
+            )
+        summary_lines.append(
+            f"{sector.get('sector')} · {flow_state} · {symbol_count} 只 · 资金分 {money_proxy:.1f} · 动量分 {momentum_proxy:.1f}"
+        )
+
+    sector_line = " / ".join([f"{item['sector']} x{item['symbol_count']}" for item in top_sectors[:3]]) or "暂无热点板块"
+    news_line = " | ".join([item["headline"] for item in top_news[:3] if item.get("headline")]) or "暂无可用新闻"
+    flow_line = " / ".join([f"{item['sector']} {item['flow_state']}" for item in top_sectors[:3]]) or "暂无资金偏向"
+    payload = {
+        "updated_at": _now_et_iso(),
+        "session": session_name,
+        "method": "derived",
+        "cached_at": cached.get("updated_at"),
+        "top_sectors": top_sectors,
+        "top_news": top_news,
+        "top_flows": top_flows,
+        "sector_line": sector_line,
+        "news_line": news_line,
+        "flow_line": flow_line,
+        "summary_lines": summary_lines[:8],
+    }
+    _save_market_heat(payload)
+    try:
+        _append_market_memory(
+            "market_heat",
+            [
+                f"- sectors: {sector_line}",
+                f"- news: {news_line}",
+                f"- flow: {flow_line}",
+            ],
+            timestamp=payload["updated_at"],
+        )
+    except Exception as exc:
+        logger.debug("market heat memory append skipped: %s", exc)
+    return payload
 
 
 def _build_strategy_distillate(force_refresh: bool = False) -> dict[str, Any]:
@@ -2575,6 +3794,14 @@ def _build_strategy_distillate(force_refresh: bool = False) -> dict[str, Any]:
     favored_env = _distill_ranked_keys({k: (v or {}).get("score") for k, v in environment_stats.items()}, top_n=4, min_abs_score=0.2)
     favored_factors = _distill_ranked_keys(factor_weights, top_n=4, min_abs_score=0.35)
     weak_factors = (_ranked_bucket_items(factor_weights, top_n=4, min_abs_score=0.35)[1])[:4]
+    recent_feedback = list(cached.get("recent_feedback") or [])[:18]
+    feedback_summary = _feedback_summary_lines(recent_feedback)
+    market_heat = _build_market_heat_snapshot(force_refresh=force_refresh)
+    focus_context_symbols = _focus_profile_symbol_list(focus_profile)
+    official_context = _build_official_context(
+        force_refresh=force_refresh,
+        focus_symbols=focus_context_symbols[:6],
+    )
     top_symbols = (stats.get("top_symbols") or [])[:5]
     leaders = (research_state.get("leaders") or [])[:5]
     open_signals = [item for item in (signal_state.get("signals") or []) if item.get("status") == "open"][-12:]
@@ -2616,6 +3843,19 @@ def _build_strategy_distillate(force_refresh: bool = False) -> dict[str, Any]:
         avoid.append("规避因子: " + ", ".join(item["key"] for item in weak_factors[:3]))
     if learning.get("confidence", 0) and float(learning.get("confidence", 0) or 0) < 0.45:
         avoid.append("当前学习置信度不高，避免把单一信号当成确定性结论。")
+    loss_feedback = [item for item in recent_feedback if item.get("outcome") == "loss"]
+    win_feedback = [item for item in recent_feedback if item.get("outcome") == "win"]
+    if win_feedback:
+        top_win_dte = Counter(str(item.get("dte_bucket") or "") for item in win_feedback if item.get("dte_bucket")).most_common(1)
+        if top_win_dte:
+            playbook.append(f"近期自动平仓反馈更支持 {top_win_dte[0][0]} DTE 节奏。")
+    if loss_feedback:
+        top_loss_liquidity = Counter(str(item.get("factor_liquidity") or "") for item in loss_feedback if item.get("factor_liquidity")).most_common(1)
+        if top_loss_liquidity and top_loss_liquidity[0][0] == "wide":
+            avoid.append("近期平仓反馈显示 wide spread 持续拖累结果，自动仓继续回避。")
+        top_loss_source = Counter(str(item.get("source_bucket") or "") for item in loss_feedback if item.get("source_bucket")).most_common(1)
+        if top_loss_source:
+            avoid.append(f"近期亏损更多来自 {top_loss_source[0][0]} 来源，自动仓已下调其优先级。")
 
     focus_symbols: list[dict[str, Any]] = []
     symbol_reasons = focus_profile.get("symbol_reasons", {}) if isinstance(focus_profile, dict) else {}
@@ -2682,6 +3922,16 @@ def _build_strategy_distillate(force_refresh: bool = False) -> dict[str, Any]:
         ],
         "pending_signals": pending_signal_digest,
         "pending_forecasts": pending_forecast_digest,
+        "recent_feedback": recent_feedback,
+        "feedback_summary": feedback_summary,
+        "market_heat": market_heat,
+        "official_context": official_context,
+        "auto_guard": _auto_sim_risk_guard_from_distillate(
+            {
+                "recent_feedback": recent_feedback,
+            },
+            now_et=dt.datetime.now(ET),
+        ),
         "raw_summary": str(learning.get("summary") or ""),
     }
     _save_strategy_distillate(payload)
@@ -2992,6 +4242,34 @@ def _get_option_mark(symbol: str, expiry: str, strike: float, opt_type: str) -> 
     except Exception as exc:
         logger.debug("%s option mark fallback failed: %s", lb_symbol, exc)
     return {"mark": None, "bid": None, "ask": None, "last": None, "volume": 0, "oi": 0, "iv_pct": None, "source": None, "lb_symbol": lb_symbol}
+
+
+def _sim_close_price_fallback(trade: dict[str, Any], snapshot: dict[str, Any] | None = None) -> tuple[float | None, str | None]:
+    snapshot = snapshot or {}
+    for key, source in (
+        ("mark", "snapshot_mark"),
+        ("last", "snapshot_last"),
+        ("bid", "snapshot_bid"),
+        ("ask", "snapshot_ask"),
+    ):
+        value = snapshot.get(key)
+        if value is not None and _num(value) > 0:
+            return float(value), source
+    for key, source in (
+        ("last_mark", "trade_last_mark"),
+        ("current_bid", "trade_current_bid"),
+        ("current_ask", "trade_current_ask"),
+        ("entry_price", "trade_entry_price"),
+    ):
+        value = trade.get(key)
+        if value is not None and _num(value) > 0:
+            return float(value), source
+    history = trade.get("history") or []
+    for item in reversed(history[-5:]):
+        value = _num((item or {}).get("mark"))
+        if value > 0:
+            return float(value), "trade_history_mark"
+    return None, None
 
 
 def _summarize_sim_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -4142,7 +5420,8 @@ def _build_sim_trade(payload: dict[str, Any]) -> dict[str, Any]:
     underlying = _get_underlying_mark(symbol)
     opened_at = _now_et_iso()
     market_env = _current_market_environment(refresh=False)
-    trade_plan = payload.get("trade_plan") or {}
+    trade_plan = _coerce_mapping(payload.get("trade_plan"))
+    origin = _coerce_mapping(payload.get("origin"))
     trade = {
         "id": uuid.uuid4().hex,
         "symbol": symbol,
@@ -4185,7 +5464,7 @@ def _build_sim_trade(payload: dict[str, Any]) -> dict[str, Any]:
             }
         ],
         "trade_plan": trade_plan,
-        "origin": payload.get("origin") or {},
+        "origin": origin,
     }
     return trade
 
@@ -4270,6 +5549,178 @@ def _sim_close_analysis(
     }
 
 
+def _closed_trade_feedback_item(trade: dict[str, Any]) -> dict[str, Any] | None:
+    sample = _sim_trade_learning_sample(trade)
+    if not sample:
+        return None
+    plan = sample.get("plan") or {}
+    outcome = "win" if bool(sample.get("win")) else "loss"
+    source_bucket = sample.get("source_bucket") or _plan_source_bucket(plan)
+    factor_payload = _factor_bucket_payload(plan)
+    environment_keys = [key for key in _environment_keys_from_sample(sample, None) if key]
+    lesson_parts: list[str] = []
+    if outcome == "win":
+        lesson_parts.append(f"继续偏向 {sample.get('option_type')} + {_bucket_from_dte(plan.get('dte'))} DTE")
+        if factor_payload.get("flow") in {"strong", "normal"}:
+            lesson_parts.append(f"保留 {factor_payload.get('flow')} flow")
+        if factor_payload.get("liquidity") in {"tight", "fair"}:
+            lesson_parts.append(f"保留 {factor_payload.get('liquidity')} liquidity")
+    else:
+        lesson_parts.append(f"降低 {sample.get('option_type')} / {_bucket_from_dte(plan.get('dte'))} DTE 的优先级")
+        if factor_payload.get("liquidity") == "wide":
+            lesson_parts.append("规避 wide spread")
+        if factor_payload.get("flow") == "weak":
+            lesson_parts.append("规避 weak flow")
+    return {
+        "timestamp": trade.get("closed_at") or _now_et_iso(),
+        "symbol": str(trade.get("symbol") or "").upper(),
+        "option_type": str(sample.get("option_type") or "").upper(),
+        "outcome": outcome,
+        "pnl_pct": round(_num(trade.get("realized_pnl_pct")), 2),
+        "close_reason": str(trade.get("close_reason") or ""),
+        "source_bucket": source_bucket,
+        "dte_bucket": _bucket_from_dte(plan.get("dte")),
+        "iv_bucket": _bucket_from_iv(plan.get("iv_pct")),
+        "rr_bucket": _bucket_from_rr(plan.get("risk_reward")),
+        "factor_ivrv": factor_payload.get("ivrv"),
+        "factor_skew": factor_payload.get("skew"),
+        "factor_flow": factor_payload.get("flow"),
+        "factor_liquidity": factor_payload.get("liquidity"),
+        "environment_keys": environment_keys,
+        "lesson": "；".join(lesson_parts),
+        "next_action": str(trade.get("next_action") or ""),
+    }
+
+
+def _feedback_summary_lines(feedback_items: list[dict[str, Any]]) -> list[str]:
+    if not feedback_items:
+        return []
+    wins = [item for item in feedback_items if item.get("outcome") == "win"]
+    losses = [item for item in feedback_items if item.get("outcome") == "loss"]
+
+    def _top(items: list[dict[str, Any]], key: str, prefix: str) -> str | None:
+        counts = Counter(str(item.get(key) or "") for item in items if item.get(key))
+        if not counts:
+            return None
+        label, count = counts.most_common(1)[0]
+        return f"{prefix} {label} x{count}"
+
+    lines: list[str] = []
+    for candidate in (
+        _top(wins, "source_bucket", "近期胜率更支持来源"),
+        _top(wins, "factor_flow", "近期胜率更支持 flow"),
+        _top(wins, "dte_bucket", "近期胜率更支持 DTE"),
+        _top(losses, "source_bucket", "近期亏损更多来自来源"),
+        _top(losses, "factor_liquidity", "近期亏损更多来自 liquidity"),
+        _top(losses, "close_reason", "近期主要平仓原因"),
+    ):
+        if candidate and candidate not in lines:
+            lines.append(candidate)
+    return lines[:6]
+
+
+def _next_market_open_et(now_et: Optional[dt.datetime] = None) -> dt.datetime:
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    candidate_date = now_et.date()
+    candidate = ET.localize(dt.datetime.combine(candidate_date, dt.time(4, 30)))
+    if now_et <= candidate and now_et.weekday() < 5:
+        return candidate
+    next_day = candidate_date
+    while True:
+        next_day = next_day + dt.timedelta(days=1)
+        if next_day.weekday() < 5:
+            return ET.localize(dt.datetime.combine(next_day, dt.time(4, 30)))
+
+
+def _auto_sim_risk_guard_from_distillate(distillate: dict[str, Any] | None, now_et: Optional[dt.datetime] = None) -> dict[str, Any] | None:
+    if not isinstance(distillate, dict):
+        return None
+    recent_feedback = [item for item in (distillate.get("recent_feedback") or []) if isinstance(item, dict)]
+    if len(recent_feedback) < 2:
+        return None
+    recent_losses = [item for item in recent_feedback[:4] if item.get("outcome") == "loss"]
+    if len(recent_losses) < 2:
+        return None
+    recent_hits = 0
+    matched_items: list[dict[str, Any]] = []
+    for item in recent_losses[:3]:
+        is_unusual = str(item.get("source_bucket") or "").lower() == "unusual"
+        is_wide = str(item.get("factor_liquidity") or "").lower() == "wide"
+        if is_unusual or is_wide:
+            recent_hits += 1
+            matched_items.append(item)
+    if recent_hits < 2:
+        return None
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    until = _next_market_open_et(now_et)
+    reasons = []
+    if any(str(item.get("source_bucket") or "").lower() == "unusual" for item in matched_items):
+        reasons.append("unusual")
+    if any(str(item.get("factor_liquidity") or "").lower() == "wide" for item in matched_items):
+        reasons.append("wide_spread")
+    if not reasons:
+        reasons.append("recent_loss_cluster")
+    return {
+        "active": True,
+        "reason": " + ".join(reasons),
+        "until": until.isoformat(),
+        "hit_count": recent_hits,
+        "loss_count": len(recent_losses),
+    }
+
+
+def _sync_sim_auto_risk_guard(state: dict[str, Any], distillate: dict[str, Any] | None = None, now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
+    auto = _sim_auto_state(state)
+    now_et = now_et.astimezone(ET) if isinstance(now_et, dt.datetime) and now_et.tzinfo else now_et or dt.datetime.now(ET)
+    guard = _auto_sim_risk_guard_from_distillate(distillate or {}, now_et=now_et)
+    disabled_until = _parse_iso_datetime(auto.get("disabled_until"))
+    if disabled_until and disabled_until.astimezone(ET) <= now_et:
+        auto["disabled_until"] = None
+        auto["risk_guard_reason"] = None
+        auto["risk_guard_set_at"] = None
+        auto["risk_guard_hit_count"] = 0
+    if guard:
+        guard_until = _parse_iso_datetime(guard.get("until"))
+        if not disabled_until or not guard_until or guard_until > disabled_until:
+            auto["disabled_until"] = guard.get("until")
+            auto["risk_guard_reason"] = guard.get("reason")
+            auto["risk_guard_set_at"] = _now_et_iso()
+            auto["risk_guard_hit_count"] = guard.get("hit_count", 0)
+    state["auto"] = auto
+    state["updated_at"] = _now_et_iso()
+    _save_sim_state(state)
+    return auto
+
+
+def _record_closed_trade_feedback(closed_trades: list[dict[str, Any]], refresh_learning: bool = True) -> dict[str, Any]:
+    items = [item for item in (_closed_trade_feedback_item(trade) for trade in (closed_trades or [])) if item]
+    if refresh_learning:
+        try:
+            _rebuild_learning_state()
+        except Exception as exc:
+            logger.debug("learning rebuild after close failed: %s", exc)
+    if not items:
+        return _build_strategy_distillate(force_refresh=True)
+    cached = _load_strategy_distillate()
+    recent_feedback = list(cached.get("recent_feedback") or [])
+    merged_feedback = (items + recent_feedback)[:18]
+    cached["recent_feedback"] = merged_feedback
+    cached["feedback_summary"] = _feedback_summary_lines(merged_feedback)
+    _save_strategy_distillate(cached)
+    distillate = _build_strategy_distillate(force_refresh=True)
+    try:
+        state = _load_sim_state()
+        _sync_sim_auto_risk_guard(state, distillate, now_et=dt.datetime.now(ET))
+    except Exception as exc:
+        logger.debug("sim risk guard sync failed: %s", exc)
+    try:
+        summary_lines = [f"- {item.get('symbol')} {item.get('option_type')} {item.get('outcome')} pnl={item.get('pnl_pct')}% | {item.get('lesson')}" for item in items[:6]]
+        _append_market_memory("sim_trade_feedback", summary_lines, timestamp=_now_et_iso())
+    except Exception as exc:
+        logger.debug("sim feedback memory append failed: %s", exc)
+    return distillate
+
+
 def _close_sim_trade(
     state: dict[str, Any],
     trade_id: str,
@@ -4291,6 +5742,12 @@ def _close_sim_trade(
             snapshot = _get_option_mark(symbol, expiry, strike, opt_type)
             close_price = snapshot.get("mark")
         if close_price is None:
+            fallback_price, fallback_source = _sim_close_price_fallback(trade, snapshot if 'snapshot' in locals() else None)
+            close_price = fallback_price
+            if close_price is not None:
+                fallback_note = f"fallback:{fallback_source}" if fallback_source else "fallback"
+                note = f"{note} | {fallback_note}".strip(" |")
+        if close_price is None:
             raise ValueError("无法获取平仓价格")
         entry_price = float(trade.get("entry_price") or 0)
         qty = int(trade.get("qty") or 1)
@@ -4305,6 +5762,9 @@ def _close_sim_trade(
         trade["close_reason"] = close_meta["reason_key"]
         trade["close_analysis"] = close_meta["analysis"]
         trade["next_action"] = close_meta["next_action"]
+        feedback_item = _closed_trade_feedback_item(trade)
+        if feedback_item:
+            trade["feedback_item"] = feedback_item
         trade["updated_at"] = trade["closed_at"]
         state["trades"][idx] = trade
         closed = state.setdefault("closed", [])
@@ -4642,6 +6102,7 @@ def _run_sim_auto_cycle(now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
     context = _auto_sim_trade_context(now_et)
     state = context["state"]
     auto = context["auto"]
+    distillate_snapshot: dict[str, Any] = {}
     if not auto.get("enabled", True):
         auto["updated_at"] = _now_et_iso()
         state["updated_at"] = auto["updated_at"]
@@ -4657,6 +6118,7 @@ def _run_sim_auto_cycle(now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
         snapshot = _build_session_screen(session_key, refresh=False, prefer_cached=True, include_forecast=True)
         if not snapshot.get("top_candidates"):
             snapshot = _build_session_screen(session_key, refresh=True, prefer_cached=False, include_forecast=True)
+        distillate_snapshot = snapshot.get("strategy_distillate") if isinstance(snapshot.get("strategy_distillate"), dict) else {}
 
     for trade in list(context.get("open_trades") or []):
         if not window_open:
@@ -4672,31 +6134,54 @@ def _run_sim_auto_cycle(now_et: Optional[dt.datetime] = None) -> dict[str, Any]:
 
     if window_open and snapshot and not closed:
         context["snapshot"] = snapshot
-        candidate = _auto_sim_select_candidate(snapshot, context)
-        if candidate and len(opened) < int(auto.get("max_new_per_cycle", SIM_AUTO_MAX_NEW_PER_CYCLE) or SIM_AUTO_MAX_NEW_PER_CYCLE):
-            try:
-                trade = _auto_sim_open_trade(candidate, context, session_key)
-                if trade:
-                    opened.append(trade)
-                    auto["last_candidate_summary"] = {
-                        "symbol": candidate["row"].get("symbol"),
-                        "contract": candidate["plan"].get("contract"),
-                        "score": candidate.get("score"),
-                        "score_breakdown": candidate.get("score_breakdown") or {},
-                        "selected_at": _now_et_iso(),
-                    }
-            except Exception as exc:
-                logger.warning("auto sim open failed: %s", exc)
+        guard_before_open = _auto_sim_risk_guard_from_distillate(distillate_snapshot, now_et=now_et)
+        disabled_until = _parse_iso_datetime(auto.get("disabled_until"))
+        guard_active_before_open = bool((disabled_until and disabled_until.astimezone(ET) > now_et) or guard_before_open)
+        if guard_active_before_open:
+            auto["risk_guard_reason"] = (guard_before_open or {}).get("reason") or auto.get("risk_guard_reason") or "loss_cluster"
+            auto["disabled_until"] = (guard_before_open or {}).get("until") or auto.get("disabled_until")
+            auto["last_action"] = f"guard:{auto.get('risk_guard_reason')}"
+            auto["last_message"] = f"open blocked until {auto.get('disabled_until')}"
+        else:
+            candidate = _auto_sim_select_candidate(snapshot, context)
+            if candidate and len(opened) < int(auto.get("max_new_per_cycle", SIM_AUTO_MAX_NEW_PER_CYCLE) or SIM_AUTO_MAX_NEW_PER_CYCLE):
+                try:
+                    trade = _auto_sim_open_trade(candidate, context, session_key)
+                    if trade:
+                        opened.append(trade)
+                        auto["last_candidate_summary"] = {
+                            "symbol": candidate["row"].get("symbol"),
+                            "contract": candidate["plan"].get("contract"),
+                            "score": candidate.get("score"),
+                            "score_breakdown": candidate.get("score_breakdown") or {},
+                            "selected_at": _now_et_iso(),
+                        }
+                except Exception as exc:
+                    logger.warning("auto sim open failed: %s", exc)
 
     auto["last_cycle_at"] = _now_et_iso()
     if closed:
+        distillate = _record_closed_trade_feedback(closed, refresh_learning=True)
+        distillate_snapshot = distillate if isinstance(distillate, dict) else distillate_snapshot
         auto["last_close_at"] = closed[-1].get("closed_at") or _now_et_iso()
         auto["last_close_signature"] = _sim_trade_signature(closed[-1])
         auto["last_action"] = f"close:{closed[-1].get('symbol')}:{closed[-1].get('contract')}"
+        auto["last_feedback_summary"] = (distillate.get("feedback_summary") or [])[:4]
+    guard = _auto_sim_risk_guard_from_distillate(distillate_snapshot, now_et=now_et) if window_open else None
+    if guard:
+        auto["disabled_until"] = guard.get("until")
+        auto["risk_guard_reason"] = guard.get("reason")
+        auto["risk_guard_set_at"] = _now_et_iso()
+        auto["risk_guard_hit_count"] = guard.get("hit_count", 0)
+    disabled_until = _parse_iso_datetime(auto.get("disabled_until"))
+    guard_active = bool(disabled_until and disabled_until.astimezone(ET) > now_et)
     auto["updated_at"] = auto["last_cycle_at"]
     auto["last_message"] = f"opened {len(opened)} / closed {len(closed)} / window {'open' if window_open else 'closed'}"
     if not auto.get("last_action"):
         auto["last_action"] = auto["last_message"]
+    if guard_active and not opened:
+        auto["last_action"] = f"guard:{auto.get('risk_guard_reason') or 'loss_cluster'}"
+        auto["last_message"] = f"open blocked until {auto.get('disabled_until')}"
     state["auto"] = auto
     state["updated_at"] = auto["updated_at"]
     _save_sim_state(state)
@@ -4859,6 +6344,30 @@ def _mask_webull_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _configure_webull_sdk_logging(api_client: Any, include_data_logger: bool = False) -> None:
+    logger_names = ["webull", "webull.core", "webull.trade"]
+    if include_data_logger:
+        logger_names.append("webull.data")
+
+    for logger_name in logger_names:
+        sdk_logger = logging.getLogger(logger_name)
+        sdk_logger.setLevel(logging.WARNING)
+        sdk_logger.propagate = True
+        removable = []
+        for handler in sdk_logger.handlers:
+            if isinstance(handler, logging.FileHandler):
+                removable.append(handler)
+        for handler in removable:
+            sdk_logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+    setattr(api_client, "_stream_logger_set", True)
+    setattr(api_client, "_file_logger_set", True)
+
+
 def _webull_client(config: dict[str, Any]):
     if WebullApiClient is None or WebullTradeClient is None:
         raise RuntimeError("webull sdk unavailable")
@@ -4884,6 +6393,7 @@ def _webull_client(config: dict[str, Any]):
             api_client.set_token(access_token)
         except Exception as exc:
             logger.warning("webull token set failed: %s", exc)
+    _configure_webull_sdk_logging(api_client, include_data_logger=False)
     return api_client, WebullTradeClient(api_client)
 
 
@@ -4911,6 +6421,7 @@ def _webull_data_client(config: dict[str, Any]):
             api_client.set_token(access_token)
         except Exception as exc:
             logger.warning("webull token set failed for data client: %s", exc)
+    _configure_webull_sdk_logging(api_client, include_data_logger=True)
     return api_client, WebullDataClient(api_client)
 
 
@@ -5292,6 +6803,57 @@ def _webull_status_hint(last_error: str) -> str:
     return ""
 
 
+def _webull_error_category(last_error: str) -> str:
+    err = (last_error or "").upper()
+    if not err.strip():
+        return ""
+    if "WEBULL_TRADE_SDK.LOG" in err or "WEBULL_DATA_SDK.LOG" in err or "WINERROR 32" in err or "PERMISSIONERROR" in err:
+        return "sdk_logging"
+    if "2FA_VERIFY_FAILED" in err or "VERIFY" in err or "TOKEN" in err or "SECRET" in err or "API KEY" in err or "UNAUTHORIZED" in err or "401" in err or "403" in err:
+        return "auth"
+    if "ACCOUNT_ID" in err:
+        return "account"
+    if "TOO_MANY_REQUESTS" in err or "429" in err:
+        return "rate_limit"
+    if "TIMEOUT" in err or "TIMED OUT" in err or "CONNECTION" in err or "MAX RETRIES" in err or "NAME OR SERVICE NOT KNOWN" in err:
+        return "network"
+    if "ORDER_BLOCKED" in err or "BUYING POWER" in err or "INSUFFICIENT" in err or "RISK" in err:
+        return "risk"
+    return "unknown"
+
+
+def _webull_error_details(last_error: str) -> dict[str, str]:
+    category = _webull_error_category(last_error)
+    hint = _webull_status_hint(last_error)
+    if category == "sdk_logging" and not hint:
+        hint = "这是 Webull SDK 的本地日志轮转问题，不影响 token 本身；重启到新版本服务后应当消失。"
+    elif category == "auth" and not hint:
+        hint = "鉴权失败，优先检查 API Key、Secret、Access Token 和 2FA 状态。"
+    elif category == "network" and not hint:
+        hint = "网络请求失败，先检查代理、网络连通性和接口可达性。"
+    elif category == "risk" and not hint:
+        hint = "账户或风控限制阻止了操作，先检查 buying power、持仓上限和风控阈值。"
+    elif category == "account" and not hint:
+        hint = "账号列表已拿到，但当前未绑定有效 account_id。"
+    return {"category": category, "hint": hint}
+
+
+def _webull_cached_snapshot(state: dict[str, Any], ttl_seconds: int = WEBULL_STATUS_CACHE_SECONDS) -> Optional[dict[str, Any]]:
+    snapshot = state.get("last_status")
+    if not isinstance(snapshot, dict):
+        return None
+    updated_at = _parse_iso_datetime(snapshot.get("updated_at") or state.get("updated_at"))
+    if not updated_at:
+        return None
+    age = (dt.datetime.now(ET) - updated_at).total_seconds()
+    if age > max(1, ttl_seconds):
+        return None
+    cached = dict(snapshot)
+    cached["cached"] = True
+    cached["cache_age_seconds"] = round(age, 2)
+    return cached
+
+
 def _webull_rank_live_plan(plans: list[dict[str, Any]], notes: str = "") -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(plans, list) or not plans:
         return None, []
@@ -5323,6 +6885,10 @@ def _webull_rank_live_plan(plans: list[dict[str, Any]], notes: str = "") -> tupl
 
 def _webull_snapshot(config: dict[str, Any]) -> dict[str, Any]:
     cfg = _merge_webull_config(config)
+    state = _load_webull_state()
+    cached = _webull_cached_snapshot(state)
+    if cached:
+        return cached
     out: dict[str, Any] = {
         "enabled": bool(cfg.get("enabled")),
         "auto_execute_on_scan": bool(cfg.get("auto_execute_on_scan")),
@@ -5344,11 +6910,14 @@ def _webull_snapshot(config: dict[str, Any]) -> dict[str, Any]:
         "recent_executions": [],
         "last_error": cfg.get("last_error") or "",
         "hint": _webull_status_hint(cfg.get("last_error") or ""),
+        "error_category": _webull_error_category(cfg.get("last_error") or ""),
+        "cached": False,
+        "cache_age_seconds": 0.0,
+        "updated_at": _now_et_iso(),
     }
     if not cfg.get("app_key") or not cfg.get("app_secret"):
         out["last_error"] = "请先填写 Webull 配置"
-        out["hint"] = _webull_status_hint(out["last_error"])
-        state = _load_webull_state()
+        out.update(_webull_error_details(out["last_error"]))
         state["last_status"] = out
         _save_webull_state(state)
         return out
@@ -5403,19 +6972,21 @@ def _webull_snapshot(config: dict[str, Any]) -> dict[str, Any]:
                 "order_blocked": bool(block_reasons),
                 "block_reasons": block_reasons,
                 "last_error": "",
+                "error_category": "",
                 "hint": "",
+                "updated_at": _now_et_iso(),
             }
         )
     except Exception as exc:
         out["last_error"] = str(exc)
-        out["hint"] = _webull_status_hint(out["last_error"])
+        out.update(_webull_error_details(out["last_error"]))
         cfg["last_error"] = str(exc)
         if cfg.get("app_key") or cfg.get("app_secret") or cfg.get("access_token"):
             try:
                 _save_webull_config(cfg)
             except Exception:
                 pass
-    state = _load_webull_state()
+    out["updated_at"] = _now_et_iso()
     out["recent_executions"] = _webull_recent_execution_summary(state)
     state["last_status"] = out
     _save_webull_state(state)
@@ -5626,11 +7197,10 @@ def _normalize_ai_provider(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
 def _collect_ai_providers(body: dict[str, Any]) -> list[dict[str, Any]]:
     providers: list[dict[str, Any]] = []
     raw = body.get("ai_providers")
-    if isinstance(raw, list):
-        for item in raw:
-            provider = _normalize_ai_provider(item)
-            if provider and provider.get("enabled"):
-                providers.append(provider)
+    for item in _coerce_list(raw):
+        provider = _normalize_ai_provider(_coerce_mapping(item))
+        if provider and provider.get("enabled"):
+            providers.append(provider)
 
     if providers:
         return providers
@@ -6050,6 +7620,95 @@ def _compute_vwap(intraday: pd.DataFrame):
     return df
 
 
+def _intraday_forward_context(
+    symbol: str,
+    plan_type: str | None = None,
+    hist: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    if not _session_scan_window_open():
+        return {"available": False, "bonus": 0.0, "summary": "", "metrics": {}}
+    intra = _longbridge_intraday(symbol, 120)
+    if intra.empty or "Close" not in intra or len(intra) < 3:
+        return {"available": False, "bonus": 0.0, "summary": "", "metrics": {}}
+
+    df = _compute_vwap(intra)
+    if df is None:
+        df = intra
+    close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    if len(close) < 3:
+        return {"available": False, "bonus": 0.0, "summary": "", "metrics": {}}
+
+    first_open = None
+    if "Open" in df and not pd.to_numeric(df["Open"], errors="coerce").dropna().empty:
+        first_open = float(pd.to_numeric(df["Open"], errors="coerce").dropna().iloc[0])
+    last_close = float(close.iloc[-1])
+
+    prev_close = None
+    if hist is not None and not hist.empty and "Close" in hist.columns:
+        hist_close = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+        if len(hist_close) >= 2:
+            prev_close = float(hist_close.iloc[-2])
+        elif len(hist_close) == 1:
+            prev_close = float(hist_close.iloc[-1])
+
+    gap_pct = ((first_open - prev_close) / prev_close * 100.0) if first_open and prev_close else None
+    day_ret = ((last_close - first_open) / first_open * 100.0) if first_open else None
+
+    short_base = float(close.iloc[-6]) if len(close) >= 6 else float(close.iloc[0])
+    mid_base = float(close.iloc[-12]) if len(close) >= 12 else None
+    short_mom = ((last_close - short_base) / short_base * 100.0) if short_base else None
+    mid_mom = ((last_close - mid_base) / mid_base * 100.0) if mid_base else None
+    accel = (short_mom - mid_mom) if short_mom is not None and mid_mom is not None else None
+
+    vwap = None
+    if "vwap" in df:
+        vwap_series = pd.to_numeric(df["vwap"], errors="coerce").dropna()
+        if not vwap_series.empty:
+            vwap = float(vwap_series.iloc[-1])
+    vwap_dist = ((last_close - vwap) / vwap * 100.0) if vwap else None
+
+    plan_side = str(plan_type or "").upper()
+    direction = 1.0 if plan_side == "CALL" else -1.0 if plan_side == "PUT" else 0.0
+    weighted = 0.0
+    if direction != 0:
+        weighted = direction * (
+            (gap_pct or 0.0) * 0.35
+            + (day_ret or 0.0) * 0.85
+            + (short_mom or 0.0) * 0.65
+            + (vwap_dist or 0.0) * 0.35
+            + (accel or 0.0) * 0.20
+        )
+    bonus = round(max(-6.0, min(8.0, weighted)), 2)
+
+    summary_parts: list[str] = []
+    if gap_pct is not None:
+        summary_parts.append(f"缺口 {gap_pct:+.2f}%")
+    if day_ret is not None:
+        summary_parts.append(f"盘中 {day_ret:+.2f}%")
+    if short_mom is not None:
+        summary_parts.append(f"近30m {short_mom:+.2f}%")
+    if vwap_dist is not None:
+        summary_parts.append(f"VWAP {vwap_dist:+.2f}%")
+    if accel is not None:
+        summary_parts.append(f"加速度 {accel:+.2f}%")
+
+    metrics = {
+        "gap_pct": _safe(gap_pct, 2) if gap_pct is not None else None,
+        "day_ret_pct": _safe(day_ret, 2) if day_ret is not None else None,
+        "short_mom_pct": _safe(short_mom, 2) if short_mom is not None else None,
+        "mid_mom_pct": _safe(mid_mom, 2) if mid_mom is not None else None,
+        "vwap_dist_pct": _safe(vwap_dist, 2) if vwap_dist is not None else None,
+        "accel_pct": _safe(accel, 2) if accel is not None else None,
+        "last_close": _safe(last_close, 4),
+    }
+    return {
+        "available": True,
+        "bonus": bonus,
+        "summary": "；".join(summary_parts),
+        "metrics": metrics,
+    }
+
+
 def _bs_greeks(S, K, T, r, sigma, opt_type="call"):
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         return {}
@@ -6318,7 +7977,7 @@ def _build_option_candidates(
         if not lb_full.empty:
             logger.debug("%s yahoo options expiry fetch failed, using longbridge fallback: %s", symbol, exc)
             return lb_full
-        logger.warning("%s yahoo options expiry fetch failed: %s", symbol, exc)
+        logger.debug("%s yahoo options expiry fetch failed: %s", symbol, exc)
         return lb_full if not lb_full.empty else _empty_df()
     today = dt.date.today()
     frames = []
@@ -6335,7 +7994,7 @@ def _build_option_candidates(
         try:
             chain = ticker.option_chain(exp_str)
         except Exception as exc:
-            level = logger.debug if not lb_full.empty else logger.warning
+            level = logger.debug
             level("%s option_chain %s failed: %s", symbol, exp_str, exc)
             continue
 
@@ -6607,7 +8266,7 @@ def _load_unusual_cache(cache_key: dict[str, Any], max_age_hours: float = 4.0) -
     if not UNUSUAL_OPTIONS_CACHE.exists():
         return None
     try:
-        payload = json.loads(UNUSUAL_OPTIONS_CACHE.read_text(encoding="utf-8"))
+        payload = _normalize_scan_cache_payload(json.loads(UNUSUAL_OPTIONS_CACHE.read_text(encoding="utf-8")))
         fetched_at = _parse_utc_datetime(payload.get("fetched_at"))
         if fetched_at is None:
             return None
@@ -6616,6 +8275,7 @@ def _load_unusual_cache(cache_key: dict[str, Any], max_age_hours: float = 4.0) -
             return None
         if payload.get("cache_key") != cache_key:
             return None
+        payload["rows"] = [_decorate_scan_row_event_context(dict(row)) for row in (payload.get("rows") or [])]
         payload["cached"] = True
         return payload
     except Exception as exc:
@@ -6627,7 +8287,7 @@ def _load_latest_nonempty_unusual_cache(max_age_hours: float = 24.0) -> Optional
     if not UNUSUAL_OPTIONS_CACHE.exists():
         return None
     try:
-        payload = json.loads(UNUSUAL_OPTIONS_CACHE.read_text(encoding="utf-8"))
+        payload = _normalize_scan_cache_payload(json.loads(UNUSUAL_OPTIONS_CACHE.read_text(encoding="utf-8")))
         fetched_at = _parse_utc_datetime(payload.get("fetched_at"))
         if fetched_at is None:
             return None
@@ -6637,6 +8297,7 @@ def _load_latest_nonempty_unusual_cache(max_age_hours: float = 24.0) -> Optional
         rows = payload.get("rows") or []
         if not rows:
             return None
+        payload["rows"] = [_decorate_scan_row_event_context(dict(row)) for row in rows]
         payload["cached"] = True
         payload["stale_fallback"] = True
         return payload
@@ -6647,6 +8308,7 @@ def _load_latest_nonempty_unusual_cache(max_age_hours: float = 24.0) -> Optional
 
 def _save_unusual_cache(payload: dict[str, Any]) -> None:
     try:
+        payload = _normalize_scan_cache_payload(payload)
         UNUSUAL_OPTIONS_CACHE.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=_iso_timestamp),
             encoding="utf-8",
@@ -6659,7 +8321,7 @@ def _load_top50_cache(cache_key: dict[str, Any], max_age_hours: float = 4.0) -> 
     if not TOP50_CACHE.exists():
         return None
     try:
-        payload = json.loads(TOP50_CACHE.read_text(encoding="utf-8"))
+        payload = _normalize_scan_cache_payload(json.loads(TOP50_CACHE.read_text(encoding="utf-8")))
         fetched_at = _parse_utc_datetime(payload.get("fetched_at"))
         if fetched_at is None:
             return None
@@ -6668,6 +8330,7 @@ def _load_top50_cache(cache_key: dict[str, Any], max_age_hours: float = 4.0) -> 
             return None
         if payload.get("cache_key") != cache_key:
             return None
+        payload["rows"] = [_decorate_scan_row_event_context(dict(row)) for row in (payload.get("rows") or [])]
         return payload
     except Exception as exc:
         logger.warning("top50 cache load failed: %s", exc)
@@ -6676,6 +8339,7 @@ def _load_top50_cache(cache_key: dict[str, Any], max_age_hours: float = 4.0) -> 
 
 def _save_top50_cache(payload: dict[str, Any]) -> None:
     try:
+        payload = _normalize_scan_cache_payload(payload)
         TOP50_CACHE.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=_iso_timestamp),
             encoding="utf-8",
@@ -6688,7 +8352,7 @@ def _load_latest_nonempty_top50_cache(max_age_hours: float = 24.0) -> Optional[d
     if not TOP50_CACHE.exists():
         return None
     try:
-        payload = json.loads(TOP50_CACHE.read_text(encoding="utf-8"))
+        payload = _normalize_scan_cache_payload(json.loads(TOP50_CACHE.read_text(encoding="utf-8")))
         fetched_at = _parse_utc_datetime(payload.get("fetched_at"))
         if fetched_at is None:
             return None
@@ -6698,6 +8362,7 @@ def _load_latest_nonempty_top50_cache(max_age_hours: float = 24.0) -> Optional[d
         rows = payload.get("rows") or []
         if not rows:
             return None
+        payload["rows"] = [_decorate_scan_row_event_context(dict(row)) for row in rows]
         payload["cached"] = True
         payload["stale_fallback"] = True
         return payload
@@ -6710,6 +8375,9 @@ def _daily_history(symbol: str, count: int = 120) -> tuple[pd.DataFrame, str]:
     hist = _longbridge_history(symbol, count)
     if not hist.empty:
         return hist, "longbridge"
+    hist = _tiingo_history(symbol, count=count, freq="daily")
+    if not hist.empty:
+        return hist, "tiingo"
     hist = _twelvedata_history(symbol, interval="1day", outputsize=count)
     if not hist.empty:
         return hist, "twelvedata"
@@ -6726,6 +8394,9 @@ def _historical_research_fetch_history(symbol: str, years: int = 5) -> tuple[pd.
     source = "longbridge"
     if count <= 1000:
         hist = _longbridge_history(symbol, count)
+    if hist.empty:
+        hist = _tiingo_history(symbol, count=min(count, 2000), freq="daily")
+        source = "tiingo"
     if hist.empty:
         hist = _twelvedata_history(symbol, interval="1day", outputsize=min(count, 5000))
         source = "twelvedata"
@@ -6860,11 +8531,16 @@ def _attach_longbridge_depths(symbol: str, rows: pd.DataFrame, max_rows: int = 1
     if rows.empty or "lb_symbol" not in rows.columns:
         return rows
     enriched = rows.copy()
+    targets = [str(item) for item in enriched.head(max_rows)["lb_symbol"].dropna().tolist() if str(item)]
+    quotes = _longbridge_option_quotes(targets)
     for idx, row in enriched.head(max_rows).iterrows():
-        lb_symbol = row.get("lb_symbol")
+        lb_symbol = str(row.get("lb_symbol") or "")
         if not lb_symbol:
             continue
-        bid, ask = _longbridge_option_depth(str(lb_symbol))
+        quote = quotes.get(lb_symbol)
+        snapshot = _extract_option_mark_from_quote(quote) if quote is not None else {}
+        bid = snapshot.get("bid")
+        ask = snapshot.get("ask")
         if bid is not None:
             enriched.at[idx, "bid"] = bid
         if ask is not None:
@@ -6931,7 +8607,14 @@ def _unusual_direction_bonus(opt_type: str, tech_bias: str) -> float:
     return 0.0
 
 
-def _unusual_reason_cn(row: dict[str, Any], plan: dict[str, Any], profile: dict[str, Any], tech_bias: str) -> str:
+def _unusual_reason_cn(
+    row: dict[str, Any],
+    plan: dict[str, Any],
+    profile: dict[str, Any],
+    tech_bias: str,
+    forward_context: dict[str, Any] | None = None,
+    earnings_event: dict[str, Any] | None = None,
+) -> str:
     symbol = row.get("symbol") or plan.get("symbol") or ""
     name = profile.get("long_name") or row.get("name") or symbol
     ratio = _num(row.get("vol_oi_ratio"))
@@ -6965,6 +8648,20 @@ def _unusual_reason_cn(row: dict[str, Any], plan: dict[str, Any], profile: dict[
         parts.append(f"计划置信度 {float(plan.get('setup_confidence')):.1f}")
     if plan.get("execution_tier"):
         parts.append(f"执行等级 {plan.get('execution_tier')}")
+    earnings_event = earnings_event or {}
+    if earnings_event.get("label"):
+        parts.append(f"事件风险 {earnings_event.get('label')}")
+    forward_context = forward_context or {}
+    if forward_context.get("available"):
+        bonus = forward_context.get("bonus")
+        summary = str(forward_context.get("summary") or "").strip()
+        if bonus is not None:
+            try:
+                parts.append(f"盘中前瞻分 {float(bonus):+.2f}")
+            except Exception:
+                pass
+        if summary:
+            parts.append(f"盘中状态 {summary}")
     return "；".join(parts)
 
 
@@ -7171,7 +8868,9 @@ def _scan_unusual_symbol(
         research_bonus = _num(plan.get("research_bonus"))
         winner_bonus = _num(plan.get("winner_pattern_bonus"))
         direction_bonus = _unusual_direction_bonus(plan.get("type"), tech_bias)
-        final_score = _num(contract.get("unusual_score")) + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus + direction_bonus + _num(row.get("pre_score")) * 0.04
+        forward_context = _intraday_forward_context(symbol, plan.get("type"), hist=hist)
+        forward_bonus = _num(forward_context.get("bonus"))
+        final_score = _num(contract.get("unusual_score")) + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus + direction_bonus + forward_bonus + _num(row.get("pre_score")) * 0.04
         output = {
             "symbol": symbol,
             "name": row.get("name") or profile.get("long_name") or symbol,
@@ -7211,6 +8910,9 @@ def _scan_unusual_symbol(
             "learning_bonus": learning_bonus,
             "research_bonus": research_bonus,
             "winner_pattern_bonus": winner_bonus,
+            "forward_bonus": forward_bonus,
+            "forward_summary": forward_context.get("summary"),
+            "forward_metrics": forward_context.get("metrics"),
             "winner_pattern_match": plan.get("winner_pattern_match"),
             "research_confidence": plan.get("research_confidence"),
             "research_signal": plan.get("research_signal"),
@@ -7219,8 +8921,23 @@ def _scan_unusual_symbol(
             "direction_bonus": direction_bonus,
             "final_score": round(final_score, 2),
         }
-        output["reason_cn"] = _unusual_reason_cn(output, plan, profile, tech_bias)
+        earnings_event = _fetch_earnings_event(symbol)
+        action_brief = _trade_action_brief(plan, output, earnings_event)
+        output["earnings_event"] = earnings_event
+        output["action_brief"] = action_brief
+        output["reason_cn"] = _unusual_reason_cn(
+            output,
+            plan,
+            profile,
+            tech_bias,
+            forward_context={"available": bool(forward_context.get("summary")), "bonus": forward_bonus, "summary": forward_context.get("summary")},
+            earnings_event=earnings_event,
+        )
         output["analysis_cn"] = _unusual_analysis_cn(plan)
+        if action_brief.get("summary"):
+            output["analysis_cn"] += f"，建议 {action_brief['summary']}"
+        if output.get("forward_summary"):
+            output["analysis_cn"] += f"，盘中状态 {output['forward_summary']}"
         results.append(output)
     return results
 
@@ -7272,12 +8989,6 @@ def _scan_daily_unusual_options(
             latest_nonempty["cache_key"] = cache_key
             return latest_nonempty
         return cached
-    if cached and refresh:
-        fetched_at = _parse_utc_datetime(cached.get("fetched_at"))
-        stale_seconds = (_utc_now() - fetched_at).total_seconds() if fetched_at else None
-        if stale_seconds is not None and stale_seconds < 15 * 60 and cached_rows and cached_unique_symbols >= 2:
-            return cached
-
     profile = _chart_library_profile() if use_library_bias else {"tag_counts": {}}
     profile["user_focus"] = _load_user_focus_profile()
     bias = _chart_library_bias(profile)
@@ -7418,8 +9129,8 @@ def scan():
     webull_market_status = {"enabled": enable_webull_market_data, "used_for": [], "probe": {}}
 
     try:
-        library_profile = _chart_library_profile()
-        library_conclusion = library_profile.get("conclusion", {})
+        library_profile = _coerce_mapping(_chart_library_profile())
+        library_conclusion = _coerce_mapping(library_profile.get("conclusion"))
         hist90 = _empty_df()
         history_source = ""
         if enable_webull_market_data:
@@ -7491,10 +9202,14 @@ def scan():
         full = _apply_option_factor_model(full, spot, hv30, tech_bias)
         top = _select_scan_rows(full, top_n, opt_filter, tech_bias)
         if "lb_symbol" in top.columns:
+            lb_targets = [str(item) for item in top["lb_symbol"].dropna().tolist() if str(item)]
+            lb_quotes = _longbridge_option_quotes(lb_targets)
             bids = []
             asks = []
             for _, row in top.iterrows():
-                bid, ask = _longbridge_option_depth(row.get("lb_symbol"))
+                quote = lb_quotes.get(str(row.get("lb_symbol") or ""))
+                snapshot = _extract_option_mark_from_quote(quote) if quote is not None else {}
+                bid, ask = snapshot.get("bid"), snapshot.get("ask")
                 bids.append(bid)
                 asks.append(ask)
             top["bid"] = pd.to_numeric(pd.Series(bids, index=top.index), errors="coerce")
@@ -7539,9 +9254,10 @@ def scan():
             _tag_trade_plans_source(_build_trade_plans(symbol, hist90, contracts, spot, tech_bias, iv_rank), "scan"),
             tech_bias,
         )
+        trade_plans = [_coerce_mapping(plan) for plan in _coerce_list(trade_plans) if _coerce_mapping(plan)]
         _record_signal_candidates(symbol, spot, trade_plans, tech_bias, source="scan")
-        research_profile = _historical_research_profile(symbol)
-        weekly_forecast = _weekly_forecast_payload(
+        research_profile = _coerce_mapping(_historical_research_profile(symbol))
+        weekly_forecast = _coerce_mapping(_weekly_forecast_payload(
             symbol,
             spot=spot,
             horizon_days=int(body.get("forecast_horizon_days", 5)),
@@ -7549,8 +9265,10 @@ def scan():
             record=bool(body.get("record_forecast", False)),
             adaptive_horizon=bool(body.get("adaptive_forecast_horizon", True)),
             candidate_horizons=body.get("forecast_candidate_horizons") if isinstance(body.get("forecast_candidate_horizons"), list) else None,
-        )
-        strategy = _strategy_text(
+        ))
+        earnings_event = _coerce_mapping(_fetch_earnings_event(symbol))
+        top_action_brief = _trade_action_brief((trade_plans or [{}])[0], {"source_bucket": "scan"}, earnings_event)
+        strategy = _coerce_mapping(_strategy_text(
             symbol,
             contracts,
             spot,
@@ -7561,13 +9279,15 @@ def scan():
             library_conclusion=library_conclusion,
             research_profile=research_profile,
             weekly_forecast=weekly_forecast,
-        )
+        ))
         strategy["ai_mode"] = ai_mode
         strategy["ai_provider"] = body.get("ai_provider", "deepseek")
         strategy["sim_learning"] = _sim_learning_profile()
         strategy["adaptive_learning"] = _adaptive_learning_profile()
         strategy["historical_research"] = research_profile
         strategy["weekly_forecast"] = weekly_forecast
+        strategy["earnings_event"] = earnings_event
+        strategy["action_brief"] = top_action_brief
         strategy["knowledge_context"] = _knowledge_context_for_prompt(max_chars=1200)
         strategy["factor_summary"] = {
             "hv30": hv30,
@@ -7585,6 +9305,7 @@ def scan():
                 f"ATM IV: {atm_iv}\n"
                 f"经验库结论: {json.dumps(library_conclusion, ensure_ascii=False)}\n"
                 f"5Y研究: {json.dumps(research_profile.get('symbol') or {'summary': research_profile.get('summary')}, ensure_ascii=False)}\n"
+                f"财报事件: {json.dumps(earnings_event, ensure_ascii=False)}\n"
                 f"未来一周预测: {json.dumps(weekly_forecast, ensure_ascii=False)}\n"
                 f"自主学习知识库: {strategy['knowledge_context']}\n"
                 f"候选交易: {json.dumps(trade_plans[:3], ensure_ascii=False)}\n"
@@ -7627,6 +9348,8 @@ def scan():
                 "iv_rank": iv_rank,
                 "iv_skew": iv_skew,
                 "signal": signal,
+                "earnings_event": earnings_event,
+                "action_brief": top_action_brief,
                 "strategy": strategy,
                 "trade_plans": trade_plans,
                 "contracts": contracts,
@@ -7919,15 +9642,16 @@ def sim_open():
     _save_sim_state(state)
     state = _refresh_sim_state(_load_sim_state())
     try:
-        close_text = (
-            f"模拟仓平仓 | {trade.get('symbol')} {trade.get('contract')}\n"
-            f"- 原因: {trade.get('close_analysis') or trade.get('close_note') or trade.get('close_reason') or '—'}\n"
-            f"- 下一步: {trade.get('next_action') or '—'}\n"
-            f"- PnL: {trade.get('realized_pnl')} / {trade.get('realized_pnl_pct')}%"
+        open_text = (
+            f"模拟仓开仓 | {trade.get('symbol')} {trade.get('contract')}\n"
+            f"- 数量: {trade.get('qty') or 1}\n"
+            f"- 入场: {trade.get('entry_price')}\n"
+            f"- 来源: {trade.get('source') or 'manual'}\n"
+            f"- 备注: {trade.get('notes') or '—'}"
         )
-        _queue_markdown_message(close_text)
+        _queue_markdown_message(open_text)
     except Exception as exc:
-        logger.debug("manual sim close push failed: %s", exc)
+        logger.debug("manual sim open push failed: %s", exc)
     return jsonify({"trade": trade, "summary": _summarize_sim_state(state)})
 
 
@@ -7952,8 +9676,14 @@ def sim_close():
         return jsonify({"error": str(exc)}), 400
     state["updated_at"] = _now_et_iso()
     _save_sim_state(state)
+    distillate = _record_closed_trade_feedback([trade], refresh_learning=True)
+    state = _load_sim_state()
+    state.setdefault("auto", {})
+    state["auto"]["last_feedback_summary"] = (distillate.get("feedback_summary") or [])[:4]
+    state["updated_at"] = _now_et_iso()
+    _save_sim_state(state)
     state = _refresh_sim_state(_load_sim_state())
-    return jsonify({"trade": trade, "summary": _summarize_sim_state(state)})
+    return jsonify({"trade": trade, "summary": _summarize_sim_state(state), "strategy_distillate": distillate})
 
 
 @app.route("/api/sim/close-all", methods=["GET", "POST", "OPTIONS"])
@@ -8148,12 +9878,6 @@ def _analyze_marketcap_universe(
             latest_nonempty["cache_key"] = cache_key
             return latest_nonempty
         return cached
-    if cached and refresh:
-        fetched_at = _parse_utc_datetime(cached.get("fetched_at"))
-        stale_seconds = (_utc_now() - fetched_at).total_seconds() if fetched_at else None
-        if stale_seconds is not None and stale_seconds < 15 * 60 and cached_rows:
-            return cached
-
     profile = _chart_library_profile() if use_library_bias else {"tag_counts": {}}
     bias = _chart_library_bias(profile)
     conclusion = profile.get("conclusion", {}) if isinstance(profile, dict) else {}
@@ -8233,7 +9957,9 @@ def _analyze_marketcap_universe(
             learning_bonus = _num(best_plan.get("learning_bonus"))
             research_bonus = _num(best_plan.get("research_bonus"))
             winner_bonus = _num(best_plan.get("winner_pattern_bonus"))
-            final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus
+            forward_context = _intraday_forward_context(symbol, best_plan.get("type"), hist=hist)
+            forward_bonus = _num(forward_context.get("bonus"))
+            final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus + forward_bonus
             analyzed.append(
                 {
                     "rank": len(analyzed) + 1,
@@ -8242,6 +9968,8 @@ def _analyze_marketcap_universe(
                     "market_cap": row["market_cap"],
                     "price": row["price"],
                     "change_pct": row["change_pct"],
+                    "quote_volume": row.get("quote_volume"),
+                    "quote_turnover": row.get("quote_turnover"),
                     "spot": spot,
                     "tech_bias": tech_bias,
                     "hv30": hv30,
@@ -8255,6 +9983,9 @@ def _analyze_marketcap_universe(
                     "learning_bonus": learning_bonus,
                     "research_bonus": research_bonus,
                     "winner_pattern_bonus": winner_bonus,
+                    "forward_bonus": forward_bonus,
+                    "forward_summary": forward_context.get("summary"),
+                    "forward_metrics": forward_context.get("metrics"),
                     "winner_pattern_match": best_plan.get("winner_pattern_match"),
                     "research_confidence": best_plan.get("research_confidence"),
                     "research_signal": best_plan.get("research_signal"),
@@ -8274,10 +10005,14 @@ def _analyze_marketcap_universe(
         full = _apply_option_factor_model(full, spot, hv30, tech_bias)
         top = full.nlargest(1, "score").copy()
         if "lb_symbol" in top.columns:
+            lb_targets = [str(item) for item in top["lb_symbol"].dropna().tolist() if str(item)]
+            lb_quotes = _longbridge_option_quotes(lb_targets)
             bids = []
             asks = []
             for _, opt_row in top.iterrows():
-                bid, ask = _longbridge_option_depth(opt_row.get("lb_symbol"))
+                quote = lb_quotes.get(str(opt_row.get("lb_symbol") or ""))
+                snapshot = _extract_option_mark_from_quote(quote) if quote is not None else {}
+                bid, ask = snapshot.get("bid"), snapshot.get("ask")
                 bids.append(bid)
                 asks.append(ask)
             top["bid"] = pd.to_numeric(pd.Series(bids, index=top.index), errors="coerce")
@@ -8313,7 +10048,9 @@ def _analyze_marketcap_universe(
         learning_bonus = _num(best_plan.get("learning_bonus"))
         research_bonus = _num(best_plan.get("research_bonus"))
         winner_bonus = _num(best_plan.get("winner_pattern_bonus"))
-        final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus
+        forward_context = _intraday_forward_context(symbol, best_plan.get("type"), hist=hist)
+        forward_bonus = _num(forward_context.get("bonus"))
+        final_score = float(row["pre_score"]) + float(best_plan.get("risk_reward") or 0) * 5 + float(best_plan.get("score") or 0) * 0.01 + style_bonus + sim_bonus + learning_bonus + research_bonus + winner_bonus + forward_bonus
         analyzed.append(
             {
                 "rank": len(analyzed) + 1,
@@ -8322,6 +10059,8 @@ def _analyze_marketcap_universe(
                 "market_cap": row["market_cap"],
                 "price": row["price"],
                 "change_pct": row["change_pct"],
+                "quote_volume": row.get("quote_volume"),
+                "quote_turnover": row.get("quote_turnover"),
                 "spot": spot,
                 "tech_bias": tech_bias,
                 "hv30": hv30,
@@ -8335,6 +10074,9 @@ def _analyze_marketcap_universe(
                 "learning_bonus": learning_bonus,
                 "research_bonus": research_bonus,
                 "winner_pattern_bonus": winner_bonus,
+                "forward_bonus": forward_bonus,
+                "forward_summary": forward_context.get("summary"),
+                "forward_metrics": forward_context.get("metrics"),
                 "winner_pattern_match": best_plan.get("winner_pattern_match"),
                 "research_confidence": best_plan.get("research_confidence"),
                 "research_signal": best_plan.get("research_signal"),
@@ -8360,10 +10102,14 @@ def _analyze_marketcap_universe(
         item["rr"] = item.get("best_plan", {}).get("risk_reward")
         profile = _cached_company_profile(item["symbol"])
         news_items = _cached_recent_news(item["symbol"], 3)
+        earnings_event = _fetch_earnings_event(item["symbol"])
+        action_brief = _trade_action_brief(item.get("best_plan", {}), item, earnings_event)
         item["sector"] = profile.get("sector")
         item["industry"] = profile.get("industry")
         item["company_name"] = profile.get("long_name") or item.get("name")
         item["news_headline"] = news_items[0].get("title") if news_items else ""
+        item["earnings_event"] = earnings_event
+        item["action_brief"] = action_brief
         item["reason_cn"] = _top50_reason_cn(
             item,
             item.get("best_plan", {}),
@@ -8372,6 +10118,8 @@ def _analyze_marketcap_universe(
             float(item.get("sim_bonus") or 0),
             profile=profile,
             news_items=news_items,
+            forward_context={"available": bool(item.get("forward_summary")), "bonus": item.get("forward_bonus"), "summary": item.get("forward_summary")},
+            earnings_event=earnings_event,
         )
         item["analysis_cn"] = (
             f"入场 {item['entry'] if item['entry'] is not None else '—'}，"
@@ -8380,6 +10128,10 @@ def _analyze_marketcap_universe(
             f"触发位 {item['underlying_trigger'] if item['underlying_trigger'] is not None else '—'}，"
             f"失效位 {item['underlying_invalidation'] if item['underlying_invalidation'] is not None else '—'}"
         )
+        if action_brief.get("summary"):
+            item["analysis_cn"] += f"，建议 {action_brief['summary']}"
+        if item.get("forward_summary"):
+            item["analysis_cn"] += f"，盘中状态 {item['forward_summary']}"
     for item in analyzed[: min(len(analyzed), 12)]:
         plan = item.get("best_plan") if isinstance(item.get("best_plan"), dict) else None
         if plan:
@@ -8478,6 +10230,8 @@ def _merge_session_candidates(
             "best_plan": plan or row.get("best_plan"),
             "reason_cn": row.get("reason_cn"),
             "analysis_cn": row.get("analysis_cn"),
+            "earnings_event": row.get("earnings_event") if isinstance(row.get("earnings_event"), dict) else {},
+            "action_brief": row.get("action_brief") if isinstance(row.get("action_brief"), dict) else {},
             "focus_bonus": focus_bonus,
             "focus_tags": focus_tags,
             "focus_reason": focus_profile.get("symbol_reasons", {}).get(symbol),
@@ -8510,6 +10264,8 @@ def _merge_session_candidates(
                 "best_plan": plan or row.get("best_plan"),
                 "reason_cn": row.get("reason_cn"),
                 "analysis_cn": row.get("analysis_cn"),
+                "earnings_event": row.get("earnings_event") if isinstance(row.get("earnings_event"), dict) else {},
+                "action_brief": row.get("action_brief") if isinstance(row.get("action_brief"), dict) else {},
                 "focus_bonus": focus_bonus,
                 "focus_tags": focus_tags,
                 "focus_reason": focus_profile.get("symbol_reasons", {}).get(symbol),
@@ -8523,6 +10279,10 @@ def _merge_session_candidates(
         entry["winner_pattern_bonus"] = max(_num(entry.get("winner_pattern_bonus")), _num(plan.get("winner_pattern_bonus"), _num(row.get("winner_pattern_bonus"))))
         entry["winner_pattern_match"] = sorted(set((entry.get("winner_pattern_match") or []) + (plan.get("winner_pattern_match") or row.get("winner_pattern_match") or [])))
         entry["focus_bonus"] = max(_num(entry.get("focus_bonus")), focus_bonus)
+        if not entry.get("earnings_event") and isinstance(row.get("earnings_event"), dict):
+            entry["earnings_event"] = row.get("earnings_event")
+        if not entry.get("action_brief") and isinstance(row.get("action_brief"), dict):
+            entry["action_brief"] = row.get("action_brief")
         entry["focus_tags"] = sorted(set((entry.get("focus_tags") or []) + focus_tags))
         if not entry.get("focus_reason"):
             entry["focus_reason"] = focus_profile.get("symbol_reasons", {}).get(symbol)
@@ -8544,6 +10304,13 @@ def _merge_session_candidates(
     )
     for idx, item in enumerate(ranked, start=1):
         item["rank"] = idx
+        if not isinstance(item.get("earnings_event"), dict):
+            item["earnings_event"] = {}
+        item["action_brief"] = _trade_action_brief(
+            item.get("best_plan") if isinstance(item.get("best_plan"), dict) else {},
+            item,
+            item.get("earnings_event") if isinstance(item.get("earnings_event"), dict) else {},
+        )
         item["combined_score"] = round(
             _num(item.get("final_score"))
             + _num(item.get("setup_confidence")) * 0.18
@@ -8551,6 +10318,8 @@ def _merge_session_candidates(
             + _num(item.get("focus_bonus")) * 0.65,
             2,
         )
+    for idx, item in enumerate(_session_recommended_candidates(ranked, limit=max(len(ranked), SESSION_RECOMMENDATION_LIMIT)), start=1):
+        item["recommended_rank"] = idx
     return ranked
 
 
@@ -8564,6 +10333,11 @@ def _build_session_screen(
     def _with_distillate(snapshot: dict[str, Any]) -> dict[str, Any]:
         if isinstance(snapshot, dict) and "strategy_distillate" not in snapshot:
             snapshot["strategy_distillate"] = _build_strategy_distillate(force_refresh=False)
+        if isinstance(snapshot, dict):
+            top_candidates = snapshot.get("top_candidates") or []
+            if "recommended_candidates" not in snapshot:
+                snapshot["recommended_candidates"] = _session_recommended_candidates(top_candidates)
+            snapshot["recommended_count"] = len(snapshot.get("recommended_candidates") or [])
         return snapshot
 
     session_key = str(session_name or "premarket_5h").strip().lower()
@@ -8583,12 +10357,14 @@ def _build_session_screen(
     unusual = _scan_daily_unusual_options(refresh=refresh, **unusual_args)
     focus_profile = _load_user_focus_profile()
     strategy_distillate = _build_strategy_distillate(force_refresh=refresh)
+    market_heat = strategy_distillate.get("market_heat") if isinstance(strategy_distillate.get("market_heat"), dict) else _build_market_heat_snapshot(force_refresh=refresh)
     merged_rows = _merge_session_candidates(
         top50.get("rows", []) if isinstance(top50, dict) else [],
         unusual.get("rows", []) if isinstance(unusual, dict) else [],
         session_key,
         focus_profile=focus_profile,
     )
+    recommended_rows = _session_recommended_candidates(merged_rows)
 
     if include_forecast:
         for item in merged_rows[: min(len(merged_rows), 8)]:
@@ -8605,6 +10381,7 @@ def _build_session_screen(
             except Exception as exc:
                 item["weekly_forecast"] = {"status": "error", "error": str(exc)}
 
+    previous_snapshot = snapshots.get(session_key, {}) if isinstance(snapshots.get(session_key), dict) else {}
     payload = {
         "fetched_at": _utc_now().isoformat(),
         "timestamp": _now_et_iso(),
@@ -8614,22 +10391,24 @@ def _build_session_screen(
         "winner_profile": _winner_pattern_profile(),
         "user_focus_profile": focus_profile,
         "strategy_distillate": strategy_distillate,
+        "market_heat": market_heat,
         "last_push_signature": (state.get("last_push_signature") or {}).get(session_key),
         "last_push_at": (state.get("last_push_at") or {}).get(session_key),
         "top50_returned": len(top50.get("rows", []) if isinstance(top50, dict) else []),
         "unusual_returned": len(unusual.get("rows", []) if isinstance(unusual, dict) else []),
         "candidate_count": len(merged_rows),
+        "recommended_count": len(recommended_rows),
+        "recommended_candidates": recommended_rows,
         "top_candidates": merged_rows[:12],
         "top50": top50,
         "unusual": unusual,
     }
     state["updated_at"] = payload["timestamp"]
-    snapshots = state.setdefault("snapshots", {})
     snapshots[session_key] = payload
     _save_session_screen_state(state)
     if notify_changes:
         try:
-            _maybe_push_session_delta(session_key, payload)
+            _maybe_push_session_delta(session_key, payload, previous_snapshot)
         except Exception as exc:
             logger.warning("session delta push failed: %s", exc)
     return payload
@@ -8714,7 +10493,7 @@ def universe_top50():
     universe_size = int(body.get("universe_size", UNIVERSE_SCAN_LIMIT))
     refresh = bool(body.get("refresh", False))
     use_library_bias = bool(body.get("use_library_bias", True))
-    prefer_cached = bool(body.get("prefer_cached", False))
+    prefer_cached = bool(body.get("prefer_cached", False)) and not refresh
     if prefer_cached:
         cached = _load_top50_cache(
             {
@@ -8751,7 +10530,8 @@ def universe_top50():
 @app.route("/api/unusual/daily", methods=["POST"])
 def unusual_daily():
     body = request.get_json(silent=True) or {}
-    prefer_cached = bool(body.get("prefer_cached", False))
+    refresh = bool(body.get("refresh", False))
+    prefer_cached = bool(body.get("prefer_cached", False)) and not refresh
     if prefer_cached:
         cache_key = {
             "limit": int(body.get("limit", 50)),
@@ -8777,7 +10557,7 @@ def unusual_daily():
     result = _scan_daily_unusual_options(
         limit=int(body.get("limit", 50)),
         universe_size=int(body.get("universe_size", UNIVERSE_SCAN_LIMIT)),
-        refresh=bool(body.get("refresh", False)),
+        refresh=refresh,
         min_dte=int(body.get("min_dte", 1)),
         max_dte=int(body.get("max_dte", 45)),
         min_volume=int(body.get("min_volume", 200)),
@@ -9015,6 +10795,13 @@ def research_distillate():
     return jsonify(payload)
 
 
+@app.route("/api/research/market-heat", methods=["GET"])
+def research_market_heat():
+    refresh = str(request.args.get("refresh", "")).strip().lower() in {"1", "true", "yes", "on"}
+    payload = _build_market_heat_snapshot(force_refresh=refresh)
+    return jsonify(payload)
+
+
 @app.route("/api/session-screen", methods=["GET", "POST"])
 def session_screen():
     body = request.get_json(silent=True) or {}
@@ -9042,6 +10829,9 @@ def session_screen_status():
     scheduled = {name: when.isoformat() for name, when in _scheduled_session_targets(now_et).items()}
     due = _run_due_session_screens(now_et=now_et) if str(request.args.get("run_due", "")).strip().lower() in {"1", "true", "yes", "on"} else []
     distillate = _build_strategy_distillate(force_refresh=False)
+    market_heat = _build_market_heat_snapshot(force_refresh=False)
+    premarket_snapshot = (state.get("snapshots") or {}).get("premarket_5h", {}) if isinstance((state.get("snapshots") or {}).get("premarket_5h", {}), dict) else {}
+    recommended_count = len(premarket_snapshot.get("recommended_candidates") or [])
     return jsonify(
         {
             "updated_at": state.get("updated_at"),
@@ -9053,6 +10843,15 @@ def session_screen_status():
                 "confidence": distillate.get("confidence"),
                 "essence": (distillate.get("essence") or [])[:3],
                 "focus_symbols": (distillate.get("focus_symbols") or [])[:5],
+            },
+            "market_heat": {
+                "updated_at": market_heat.get("updated_at"),
+                "sector_line": market_heat.get("sector_line"),
+                "news_line": market_heat.get("news_line"),
+                "flow_line": market_heat.get("flow_line"),
+            },
+            "recommended": {
+                "count": recommended_count,
             },
             "scheduled": scheduled,
             "due_ran": due,

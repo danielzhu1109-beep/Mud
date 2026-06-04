@@ -1,19 +1,19 @@
 # Learning Report
 
-- 更新时间: 2026-06-01T01:33:04.267668-04:00
-- 学习摘要: 系统当前更偏 双向，DTE 偏好 balanced，IV 偏好 balanced，风险收益偏好 mid，真实平仓样本 6 笔，开放模拟持仓 3 笔（有效样本权重 1.35），自主跟踪信号 244 条，学习置信度 0.95。
-- 知识摘要: 近7天方向偏好: balanced；近30天方向偏好: call；谨慎来源: scan, pool；优先环境: temp_warm；规避环境: temp_neutral, trend_bullish, sentiment_neutral；优先因子: skew_supportive, flow_normal, ivrv_cheap；规避因子: liquidity_wide, flow_weak, ivrv_neutral
-- 平仓样本: 6
-- 开放仓位: 3
-- 跟踪信号: 244
-- 开放仓平均收益: -97.94%
-- 信号胜率: 49.18
-- 近7天: samples 7 / resolved 170 / bias balanced
-- 近30天: samples 9 / resolved 244 / bias call
+- 更新时间: 2026-06-03T21:21:13.211955-04:00
+- 学习摘要: 系统当前更偏 双向，DTE 偏好 balanced，IV 偏好 balanced，风险收益偏好 mid，真实平仓样本 9 笔，开放模拟持仓 1 笔（有效样本权重 0.32），自主跟踪信号 0 条，学习置信度 0.56。
+- 知识摘要: 近7天方向偏好: balanced；近30天方向偏好: call；谨慎来源: scan, pool, unusual；规避环境: sentiment_neutral, valuation_fair, trend_bullish；规避因子: ivrv_neutral, skew_neutral, flow_weak
+- 平仓样本: 9
+- 开放仓位: 1
+- 跟踪信号: 0
+- 开放仓平均收益: -54.55%
+- 信号胜率: None
+- 近7天: samples 8 / resolved 0 / bias balanced
+- 近30天: samples 10 / resolved 0 / bias call
 
 ## Top Symbols
-- COST: pnl 424.0 / win_rate 56.1% / count 0.56
-- UNH: pnl -99.85 / win_rate 0.0% / count 0.45
-- ORCL: pnl -272.24 / win_rate 0.0% / count 1.36
-- RTX: pnl -400.74 / win_rate 0.0% / count 2.98
-- PM: pnl -484.0 / win_rate 0.0% / count 0.98
+- COST: pnl 424.0 / win_rate 51.1% / count 0.51
+- AAPL: pnl -54.55 / win_rate 0.0% / count 0.32
+- ORCL: pnl -304.0 / win_rate 0.0% / count 1.77
+- RTX: pnl -324.0 / win_rate 0.0% / count 3.25
+- PM: pnl -484.0 / win_rate 0.0% / count 0.89

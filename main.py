@@ -228,7 +228,7 @@ def _format_reason(row: dict, news_summary: str, sector_summary: str, flow_summa
     return " | ".join(parts)
 
 
-def _build_market_context(rows: list[dict]) -> dict:
+def _build_market_context(rows: list[dict], market_heat: dict | None = None) -> dict:
     sector_counter = Counter()
     news_pieces: list[str] = []
     flow_pieces: list[str] = []
@@ -240,15 +240,26 @@ def _build_market_context(rows: list[dict]) -> dict:
             news_pieces.append(row["news_summary"])
         if row.get("flow_summary"):
             flow_pieces.append(row["flow_summary"])
+    market_heat = market_heat or {}
+    sector_line = market_heat.get("sector_line") or (" / ".join([f"{k} x{v}" for k, v in sector_counter.most_common(3)]) if sector_counter else "????????")
+    news_line = market_heat.get("news_line") or (" | ".join(news_pieces[:2]) if news_pieces else "????????")
+    flow_line = market_heat.get("flow_line") or (" / ".join(flow_pieces[:2]) if flow_pieces else "????????")
     return {
-        "sector_line": " / ".join([f"{k} x{v}" for k, v in sector_counter.most_common(3)]) if sector_counter else "????????",
-        "news_line": "?".join(news_pieces[:2]) if news_pieces else "????????",
-        "flow_line": "?".join(flow_pieces[:2]) if flow_pieces else "????????",
+        "sector_line": sector_line,
+        "news_line": news_line,
+        "flow_line": flow_line,
+        "market_heat": market_heat,
     }
 
 
 def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
     focus_profile = webapp._load_user_focus_profile()
+    market_heat = webapp._build_market_heat_snapshot(force_refresh=False)
+    sector_heat_lookup = {
+        str(item.get("sector") or "").upper(): float(item.get("heat_score") or 0)
+        for item in (market_heat.get("top_sectors") or [])
+        if item.get("sector")
+    }
     universe = webapp._analyze_marketcap_universe(
         limit=DAILY_PRESELECT_LIMIT,
         universe_size=240,
@@ -280,8 +291,9 @@ def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
             sector_summary = sector
             flow_summary = f"???? {row.get('tech_bias') or 'neutral'} / IVR {row.get('iv_rank') or 'N/A'}"
             focus_bonus, focus_tags = webapp._focus_bonus_for_symbol(symbol, cluster=sector)
+            sector_heat_bonus = min(8.0, max(0.0, sector_heat_lookup.get(str(sector).upper(), 0.0) * 0.12))
             focus_reason = focus_profile.get("symbol_reasons", {}).get(symbol)
-            final_score = round(base_score + focus_bonus, 2)
+            final_score = round(base_score + focus_bonus + sector_heat_bonus, 2)
             plan = row.get("best_plan", {}) or {}
             reason_text = row.get("reason_cn") or _format_reason(row, news_summary, sector_summary, flow_summary)
             ranked.append(
@@ -300,6 +312,7 @@ def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
                     "base_score": base_score,
                     "style_bonus": row.get("style_bonus", 0),
                     "focus_bonus": focus_bonus,
+                    "sector_heat_bonus": sector_heat_bonus,
                     "focus_tags": focus_tags,
                     "focus_reason": focus_reason,
                     "reason": reason_text,
@@ -313,7 +326,7 @@ def _build_watchlist_snapshot() -> tuple[list[dict], dict, dict]:
             logger.warning("%s daily ranking failed: %s", symbol, exc)
 
     ranked = sorted(ranked, key=lambda item: item["score"], reverse=True)[:DAILY_REPORT_LIMIT]
-    return ranked, bias, _build_market_context(ranked)
+    return ranked, bias, _build_market_context(ranked, market_heat)
 
 
 def _load_unusual_watchlist() -> dict:

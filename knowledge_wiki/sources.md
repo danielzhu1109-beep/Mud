@@ -4,12 +4,11 @@
 - none
 
 ## Weak
-- scan: -0.68
-- pool: -0.39
-- unusual: -0.25
+- scan: -1.99
+- pool: -1.38
+- unusual: -1.12
 
 ## Raw
-- other: score 0.09, win_rate 100.0, sample_weight 0.25
-- pool: score -0.39, win_rate 49.06, sample_weight 12.83
-- scan: score -0.68, win_rate 45.06, sample_weight 22.61
-- unusual: score -0.25, win_rate 49.23, sample_weight 36.68
+- pool: score -1.38, win_rate 0.0, sample_weight 2.21
+- scan: score -1.99, win_rate 13.82, sample_weight 3.7
+- unusual: score -1.12, win_rate 0.0, sample_weight 1.79

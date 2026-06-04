@@ -637,7 +637,7 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:var(-
 }
 .learning-distillate-grid{
   display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-columns:repeat(3,minmax(0,1fr));
   gap:6px;
   margin-top:8px;
 }
@@ -661,6 +661,39 @@ html,body{height:100%;background:var(--bg0);color:var(--text0);font-family:var(-
   line-height:1.55;
   white-space:pre-wrap;
   word-break:break-word;
+}
+.market-heat-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+.market-heat-card{
+  border:1px solid var(--border2);
+  background:var(--bg1);
+  border-radius:4px;
+  padding:10px 12px;
+}
+.market-heat-title{
+  font-size:8px;
+  color:var(--text3);
+  font-family:var(--mono);
+  letter-spacing:1px;
+  text-transform:uppercase;
+}
+.market-heat-body{
+  margin-top:6px;
+  font-size:11px;
+  color:var(--text1);
+  line-height:1.6;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+@media (max-width: 1100px){
+  .learning-distillate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .market-heat-grid{grid-template-columns:1fr}
+}
+@media (max-width: 720px){
+  .learning-distillate-grid{grid-template-columns:1fr}
 }
 
 /* 经验库 */
@@ -1433,6 +1466,24 @@ canvas{display:block;width:100%!important;height:100%!important}
       </div>
     </div>
 
+    <div class="section" data-workspace="overview opportunities reports">
+      <div class="section-title">热点板块 / 新闻 / 资金</div>
+      <div class="market-heat-grid">
+        <div class="market-heat-card">
+          <div class="market-heat-title">板块热度</div>
+          <div class="market-heat-body" id="market-heat-sector">等待热点结果</div>
+        </div>
+        <div class="market-heat-card">
+          <div class="market-heat-title">热点新闻</div>
+          <div class="market-heat-body" id="market-heat-news">等待热点结果</div>
+        </div>
+        <div class="market-heat-card">
+          <div class="market-heat-title">资金动向</div>
+          <div class="market-heat-body" id="market-heat-flow">等待热点结果</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 最佳方案 -->
     <div class="strategy-section nav-anchor" id="strategy-anchor" data-workspace="overview reports">
       <div class="strategy-header">
@@ -1537,6 +1588,10 @@ canvas{display:block;width:100%!important;height:100%!important}
           <div class="learning-distillate-card">
             <div class="learning-distillate-title">关注池 / 待验证</div>
             <div class="learning-distillate-body" id="learning-distillate-focus">等待蒸馏结果</div>
+          </div>
+          <div class="learning-distillate-card">
+            <div class="learning-distillate-title">热点板块 / 新闻 / 资金</div>
+            <div class="learning-distillate-body" id="learning-distillate-market-heat">等待热点结果</div>
           </div>
         </div>
       </div>
@@ -2010,6 +2065,56 @@ async function readJsonSafe(res){
   }
 }
 
+function parseObjectish(value){
+  if(value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if(typeof value !== 'string') return {};
+  const text = value.trim();
+  if(!text) return {};
+  const parsers = [
+    (src) => JSON.parse(src),
+    (src) => Function(`"use strict"; return (${src});`)(),
+  ];
+  for(const parser of parsers){
+    try{
+      const parsed = parser(text);
+      if(parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    }catch(_err){}
+  }
+  return {};
+}
+
+function normalizePlan(plan){
+  return parseObjectish(plan);
+}
+
+function normalizeScanRow(row){
+  const normalized = (row && typeof row === 'object') ? {...row} : {};
+  normalized.best_plan = normalizePlan(normalized.best_plan);
+  normalized.contract = (normalized.contract && typeof normalized.contract === 'object')
+    ? normalized.contract
+    : parseObjectish(normalized.contract);
+  return normalized;
+}
+
+function normalizeScanPayload(scan){
+  const normalized = (scan && typeof scan === 'object') ? {...scan} : {};
+  normalized.strategy = parseObjectish(normalized.strategy);
+  normalized.action_brief = parseObjectish(normalized.action_brief);
+  normalized.earnings_event = parseObjectish(normalized.earnings_event);
+  normalized.trade_plans = Array.isArray(normalized.trade_plans)
+    ? normalized.trade_plans.map(normalizePlan).filter(plan => Object.keys(plan).length)
+    : [];
+  normalized.contracts = Array.isArray(normalized.contracts)
+    ? normalized.contracts.map(normalizeScanRow)
+    : [];
+  if(normalized.strategy && typeof normalized.strategy === 'object'){
+    normalized.strategy.best_plan = normalizePlan(normalized.strategy.best_plan);
+    normalized.strategy.action_brief = parseObjectish(normalized.strategy.action_brief);
+    normalized.strategy.earnings_event = parseObjectish(normalized.strategy.earnings_event);
+  }
+  return normalized;
+}
+
 function getWebullSettings(){
   return {
     enabled: !!$('webull-auto-enabled')?.checked,
@@ -2052,6 +2157,10 @@ function renderWebullStatus(data){
   const balance = data.balance || {};
   const connected = !!data.connected;
   const blocked = !!data.order_blocked;
+  const errorCategory = data.error_category || '';
+  const cacheAge = Number(data.cache_age_seconds ?? 0);
+  const cacheText = data.cached ? ` | 缓存 ${Number.isFinite(cacheAge) ? fmt(cacheAge, 1) : '0.0'}s` : '';
+  const categoryText = errorCategory ? ` | ${errorCategory}` : '';
   const accountNumber = data.account_number || '—';
   const accountId = data.account_id || '—';
   const maxOpen = data.max_open_positions ?? cfg.max_open_positions ?? '—';
@@ -2059,11 +2168,11 @@ function renderWebullStatus(data){
   const reasons = Array.isArray(data.block_reasons) ? data.block_reasons.filter(Boolean) : [];
   window.__webullConnected = !!data.connected;
   $('webull-status-text').textContent = connected
-    ? `已连接 · ${cfg.enabled ? '自动交易开启' : '自动交易关闭'} · ${data.last_error ? data.last_error : '状态正常'}`
-    : `未连接 · ${data.last_error || '请先填写 Webull 配置'}`;
+    ? `已连接 · ${cfg.enabled ? '自动交易开启' : '自动交易关闭'} · ${data.last_error ? data.last_error : '状态正常'}${categoryText}${cacheText}`
+    : `未连接 · ${data.last_error || '请先填写 Webull 配置'}${categoryText}${cacheText}`;
   $('webull-status-detail').innerHTML = connected
     ? `${blocked ? '<span class="status-badge warn">受限</span>' : '<span class="status-badge ok">可交易</span>'} 账户号 ${escHtml(accountNumber)} | 内部 ID ${escHtml(accountId)} | 预算 ${fmt(data.budget_limit, 2)} | 已用 ${fmt(data.used_capital, 2)} | 剩余 ${fmt(data.remaining_budget, 2)}`
-    : `Webull ${data.last_error || '未连接'}${data.hint ? ` · ${data.hint}` : ''}`;
+    : `Webull ${data.last_error || '未连接'}${data.hint ? ` · ${data.hint}` : ''}${data.cached ? ` · 已使用最近状态缓存` : ''}`;
   $('webull-available-cash').textContent = fmt(balance.available_cash, 2);
   $('webull-used-capital').textContent = fmt(data.used_capital, 2);
   $('webull-remaining-budget').textContent = fmt(data.remaining_budget, 2);
@@ -2077,7 +2186,7 @@ function renderWebullStatus(data){
   const blockers = $('webull-blockers');
   if(blockers){
     if(!connected){
-      blockers.innerHTML = `<strong>当前限制</strong><div class="risk-item">${escHtml(data.last_error || '未连接')}</div>`;
+      blockers.innerHTML = `<strong>当前限制</strong><div class="risk-item">${escHtml(data.last_error || '未连接')}</div>${data.hint ? `<div class="risk-item">${escHtml(data.hint)}</div>` : ''}`;
     }else if(reasons.length){
       blockers.innerHTML = `<strong>当前限制</strong>${reasons.map(item=>`<div class="risk-item">${escHtml(item)}</div>`).join('')}`;
     }else{
@@ -2248,7 +2357,7 @@ function renderWebullMarketStatus(data = {}){
 
 function getSelectedWebullPayload(){
   if(selectedRecommendationSource === 'unusual' && selectedUnusualRow?.best_plan){
-    return buildLivePayload(selectedUnusualRow.best_plan, {
+    return buildLivePayload(normalizePlan(selectedUnusualRow.best_plan), {
       symbol: selectedUnusualRow.symbol,
       name: selectedUnusualRow.name,
       source: 'unusual',
@@ -2256,7 +2365,7 @@ function getSelectedWebullPayload(){
     });
   }
   if(selectedTop50Row?.best_plan){
-    return buildLivePayload(selectedTop50Row.best_plan, {
+    return buildLivePayload(normalizePlan(selectedTop50Row.best_plan), {
       symbol: selectedTop50Row.symbol,
       name: selectedTop50Row.name,
       source: 'top50',
@@ -2264,7 +2373,7 @@ function getSelectedWebullPayload(){
     });
   }
   if(selectedUnusualRow?.best_plan){
-    return buildLivePayload(selectedUnusualRow.best_plan, {
+    return buildLivePayload(normalizePlan(selectedUnusualRow.best_plan), {
       symbol: selectedUnusualRow.symbol,
       name: selectedUnusualRow.name,
       source: 'unusual',
@@ -2738,7 +2847,7 @@ async function runTop50(refresh=false){
         refresh,
         use_library_bias: true,
         cache_max_age_hours: 6,
-        prefer_cached: true,
+        prefer_cached: false,
         max_runtime_seconds: 20
       })
     });
@@ -2752,7 +2861,7 @@ async function runTop50(refresh=false){
 }
 
 function renderTop50(data){
-  const rows = data.rows || [];
+  const rows = Array.isArray(data.rows) ? data.rows.map(normalizeScanRow) : [];
   window.__top50Rows = rows;
   $('universe-meta').textContent = formatScanMeta(data, rows, `${data.universe_size || 0} universe`);
   if(!rows.length){
@@ -2765,7 +2874,7 @@ function renderTop50(data){
     return;
   }
   $('top50-body').innerHTML = rows.map((row, idx)=>{
-    const plan = row.best_plan || {};
+    const plan = normalizePlan(row.best_plan);
     const contract = plan.contract || '—';
     const entry = plan.entry != null ? fmt(plan.entry) : '—';
     const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
@@ -2803,9 +2912,9 @@ function renderTop50(data){
 
 function setTop50Focus(row){
   if(!row) return;
-  selectedTop50Row = row;
+  selectedTop50Row = normalizeScanRow(row);
   selectedRecommendationSource = 'top50';
-  const plan = row.best_plan || {};
+  const plan = normalizePlan(selectedTop50Row.best_plan);
   const contract = plan.contract || '—';
   const entry = plan.entry != null ? fmt(plan.entry) : '—';
   const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
@@ -2813,8 +2922,8 @@ function setTop50Focus(row){
   const trigger = plan.underlying_trigger != null ? fmt(plan.underlying_trigger) : '—';
   const invalidation = plan.underlying_invalidation != null ? fmt(plan.underlying_invalidation) : '—';
   const rr = plan.risk_reward != null ? fmt(plan.risk_reward) : '—';
-  $('top50-focus-main').textContent = `${row.symbol} · ${row.name || ''} · ${contract}`;
-  $('top50-focus-sub').textContent = `${row.reason_cn || '—'} | ${row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
+  $('top50-focus-main').textContent = `${selectedTop50Row.symbol} · ${selectedTop50Row.name || ''} · ${contract}`;
+  $('top50-focus-sub').textContent = `${selectedTop50Row.reason_cn || '—'} | ${selectedTop50Row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
   $('top50-open-btn').disabled = false;
   $('top50-buy-btn').disabled = !plan.contract;
   $('top50-live-btn').disabled = !plan.contract;
@@ -2840,6 +2949,7 @@ function encodeSimPayload(payload){
 }
 
 function buildSimPayload(plan, origin = {}){
+  plan = normalizePlan(plan);
   return {
     symbol: plan.symbol || origin.symbol || currentSymbol,
     name: origin.name || plan.name || '',
@@ -2859,18 +2969,26 @@ function buildSimPayload(plan, origin = {}){
   };
 }
 
+async function submitSimPayload(payload){
+  if(!payload || !payload.symbol || !payload.expiry || payload.strike == null){
+    throw new Error('交易计划不完整，无法加入模拟仓');
+  }
+  const res = await fetch(`${API}/api/sim/open`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const data = await readJsonSafe(res);
+  if(data.error) throw new Error(data.error);
+  toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
+  await refreshSimPortfolio();
+  return data;
+}
+
 async function buySimFromEncoded(encoded){
   try{
     const payload = JSON.parse(decodeURIComponent(encoded || ''));
-    const res = await fetch(`${API}/api/sim/open`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
-    await refreshSimPortfolio();
+    await submitSimPayload(payload);
   }catch(e){
     toast(`模拟买入失败: ${e.message}`);
   }
@@ -2885,15 +3003,7 @@ async function buySimFromTop50(){
     notes: selectedTop50Row.reason_cn || '',
   });
   try{
-    const res = await fetch(`${API}/api/sim/open`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
-    await refreshSimPortfolio();
+    await submitSimPayload(payload);
   }catch(e){
     toast(`模拟买入失败: ${e.message}`);
   }
@@ -2918,7 +3028,7 @@ async function runUnusual(refresh=false){
         top_per_symbol: 4,
         use_library_bias: true,
         cache_max_age_hours: 6,
-        prefer_cached: true,
+        prefer_cached: false,
         prefilter_multiplier: 2.5,
         max_runtime_seconds: 20
       })
@@ -2933,7 +3043,7 @@ async function runUnusual(refresh=false){
 }
 
 function renderUnusual(data){
-  const rows = data.rows || [];
+  const rows = Array.isArray(data.rows) ? data.rows.map(normalizeScanRow) : [];
   window.__unusualRows = rows;
   $('unusual-meta').textContent = formatScanMeta(data, rows, `${data.prefiltered_size || 0} prefiltered`);
   if(!rows.length){
@@ -2947,7 +3057,7 @@ function renderUnusual(data){
     return;
   }
   $('unusual-body').innerHTML = rows.map((row, idx)=>{
-    const plan = row.best_plan || {};
+    const plan = normalizePlan(row.best_plan);
     const contract = plan.contract || row.contract?.name || '—';
     const entry = plan.entry != null ? fmt(plan.entry) : '—';
     const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
@@ -2981,18 +3091,18 @@ function renderUnusual(data){
 
 function setUnusualFocus(row){
   if(!row) return;
-  selectedUnusualRow = row;
+  selectedUnusualRow = normalizeScanRow(row);
   selectedRecommendationSource = 'unusual';
-  const plan = row.best_plan || {};
-  const contract = plan.contract || row.contract?.name || '—';
+  const plan = normalizePlan(selectedUnusualRow.best_plan);
+  const contract = plan.contract || selectedUnusualRow.contract?.name || '—';
   const entry = plan.entry != null ? fmt(plan.entry) : '—';
   const stop = plan.stop_loss != null ? fmt(plan.stop_loss) : '—';
   const tp = plan.take_profit != null ? fmt(plan.take_profit) : '—';
   const trigger = plan.underlying_trigger != null ? fmt(plan.underlying_trigger) : '—';
   const invalidation = plan.underlying_invalidation != null ? fmt(plan.underlying_invalidation) : '—';
   const rr = plan.risk_reward != null ? fmt(plan.risk_reward) : '—';
-  $('unusual-focus-main').textContent = `${row.symbol} · ${row.name || ''} · ${contract}`;
-  $('unusual-focus-sub').textContent = `${row.reason_cn || '—'} | ${row.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
+  $('unusual-focus-main').textContent = `${selectedUnusualRow.symbol} · ${selectedUnusualRow.name || ''} · ${contract}`;
+  $('unusual-focus-sub').textContent = `${selectedUnusualRow.reason_cn || '—'} | ${selectedUnusualRow.analysis_cn || `入场 ${entry} / 止损 ${stop} / 止盈 ${tp}`} | 触发位 ${trigger} / 失效位 ${invalidation} / RR ${rr}`;
   $('unusual-open-btn').disabled = false;
   $('unusual-buy-btn').disabled = !plan.contract;
   $('unusual-live-btn').disabled = !plan.contract;
@@ -3022,15 +3132,7 @@ async function buySimFromUnusual(){
     notes: selectedUnusualRow.reason_cn || '',
   });
   try{
-    const res = await fetch(`${API}/api/sim/open`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    toast(`已加入模拟仓: ${payload.contract || payload.symbol}`);
-    await refreshSimPortfolio();
+    await submitSimPayload(payload);
   }catch(e){
     toast(`模拟买入失败: ${e.message}`);
   }
@@ -3078,6 +3180,11 @@ function renderSimAuto(auto = {}){
   const lastCycle = auto.last_cycle_at || auto.updated_at || '';
   const lastAction = auto.last_action || '等待执行';
   const summary = enabled ? '自动模拟运行中（仅盘中）' : '自动模拟已暂停';
+  const guardUntil = auto.disabled_until ? ` | 风控闸门 ${auto.disabled_until}` : '';
+  const guardReason = auto.risk_guard_reason ? ` | 原因 ${auto.risk_guard_reason}` : '';
+  const feedbackSummary = Array.isArray(auto.last_feedback_summary) && auto.last_feedback_summary.length
+    ? ` | 反馈 ${auto.last_feedback_summary.slice(0, 2).join(' / ')}`
+    : '';
   $('sim-auto-toggle').checked = enabled;
   const candidate = auto.last_candidate_summary || {};
   const breakdown = candidate.score_breakdown || {};
@@ -3087,7 +3194,7 @@ function renderSimAuto(auto = {}){
   const candidateText = candidate.symbol
     ? ` | 最近候选 ${candidate.symbol} ${candidate.contract || ''} @ ${candidate.score ?? '—'}${reasons}`
     : '';
-  $('sim-auto-sub').textContent = `${summary}${lastCycle ? ` | ${lastCycle}` : ''}${lastAction ? ` | ${lastAction}` : ''}${candidateText}`;
+  $('sim-auto-sub').textContent = `${summary}${lastCycle ? ` | ${lastCycle}` : ''}${lastAction ? ` | ${lastAction}` : ''}${candidateText}${feedbackSummary}${guardUntil}${guardReason}`;
 }
 
 async function refreshSimAuto(){
@@ -3232,6 +3339,121 @@ function summarizeDistillateList(items, emptyText = '—'){
   return items.filter(Boolean).slice(0, 3).join('\n');
 }
 
+function summarizePanelLines(items, emptyText = '—', maxItems = 6){
+  if(!Array.isArray(items) || !items.length) return emptyText;
+  return items.filter(Boolean).slice(0, maxItems).join('\n');
+}
+
+function marketHeatNewsKey(item){
+  return [item?.sector || '', item?.symbol || '', item?.title || item?.headline || ''].join('::');
+}
+
+function formatHeatTrendTag(currentItem, previousItem){
+  if(!currentItem || !currentItem.sector) return '';
+  if(!previousItem) return '新增';
+  const currentHeat = Number(currentItem.heat_score ?? currentItem.score ?? 0);
+  const previousHeat = Number(previousItem.heat_score ?? previousItem.score ?? 0);
+  const delta = currentHeat - previousHeat;
+  if(delta >= 1.2) return '升温';
+  if(delta <= -1.2) return '降温';
+  if(currentItem.flow_state && previousItem.flow_state && currentItem.flow_state !== previousItem.flow_state){
+    if(String(currentItem.flow_state).includes('强')) return '升温';
+    if(String(currentItem.flow_state).includes('回落') || String(currentItem.flow_state).includes('弱')) return '降温';
+  }
+  return '持平';
+}
+
+function nextHeatStreakState(currentItem, previousItem, previousState){
+  const trend = formatHeatTrendTag(currentItem, previousItem);
+  if(trend === '新增') return 1;
+  if(trend === '升温') return Math.max(1, Number(previousState?.up || 0) + 1);
+  if(trend === '持平') return Number(previousState?.up || 0) > 0 ? Number(previousState.up) : 0;
+  return 0;
+}
+
+function renderMarketHeatPanel(marketHeat = {}){
+  const updatedAt = marketHeat.updated_at
+    ? `更新 ${String(marketHeat.updated_at).replace('T', ' ').slice(0, 16)}`
+    : '';
+  const topSectors = Array.isArray(marketHeat.top_sectors) ? marketHeat.top_sectors.slice(0, 4) : [];
+  const topNews = Array.isArray(marketHeat.top_news) ? marketHeat.top_news.slice(0, 4) : [];
+  const topFlows = Array.isArray(marketHeat.top_flows) && marketHeat.top_flows.length
+    ? marketHeat.top_flows.slice(0, 4)
+    : topSectors.slice(0, 4);
+  const previousSectors = Array.isArray(window.__lastMarketHeatSnapshot?.top_sectors)
+    ? window.__lastMarketHeatSnapshot.top_sectors
+    : [];
+  const previousFlows = Array.isArray(window.__lastMarketHeatSnapshot?.top_flows) && window.__lastMarketHeatSnapshot.top_flows.length
+    ? window.__lastMarketHeatSnapshot.top_flows
+    : previousSectors;
+  const previousSectorMap = new Map(previousSectors.map(item => [item?.sector, item]));
+  const previousFlowMap = new Map(previousFlows.map(item => [item?.sector, item]));
+  const previousNewsKeys = new Set(
+    (Array.isArray(window.__lastMarketHeatSnapshot?.top_news) ? window.__lastMarketHeatSnapshot.top_news : [])
+      .map(item => marketHeatNewsKey(item))
+      .filter(Boolean)
+  );
+  const previousTrendState = window.__marketHeatTrendState || {};
+  const nextTrendState = {};
+
+  const sectorLines = [];
+  if(updatedAt) sectorLines.push(updatedAt);
+  if(marketHeat.sector_line && !topSectors.length) sectorLines.push(marketHeat.sector_line);
+  topSectors.forEach(item => {
+    const trend = formatHeatTrendTag(item, previousSectorMap.get(item?.sector));
+    const upCount = nextHeatStreakState(item, previousSectorMap.get(item?.sector), previousTrendState[item?.sector]);
+    nextTrendState[item?.sector || ''] = { up: upCount };
+    const leaders = Array.isArray(item?.leaders)
+      ? item.leaders.slice(0, 3).map(lead => lead?.symbol).filter(Boolean).join(', ')
+      : '';
+    const metrics = [
+      item?.score != null && Number.isFinite(Number(item.score)) ? `score ${Number(item.score).toFixed(2)}` : '',
+      item?.flow_state || '',
+      trend,
+      upCount >= 2 ? `连升 ${upCount}` : '',
+    ].filter(Boolean).join(' | ');
+    sectorLines.push([
+      item?.sector || '—',
+      metrics,
+      leaders ? `龙头 ${leaders}` : '',
+    ].filter(Boolean).join(' | '));
+  });
+
+  const newsLines = [];
+  if(updatedAt) newsLines.push(updatedAt);
+  if(marketHeat.news_line && !topNews.length) newsLines.push(marketHeat.news_line);
+  topNews.forEach(item => {
+    const isNew = !previousNewsKeys.has(marketHeatNewsKey(item));
+    const tags = [isNew ? '新' : '', item?.sector, item?.symbol, item?.flow_state].filter(Boolean).join(' | ');
+    newsLines.push([tags, item?.title || item?.headline || '—'].filter(Boolean).join('\n'));
+  });
+
+  const flowLines = [];
+  if(updatedAt) flowLines.push(updatedAt);
+  if(marketHeat.flow_line && !topFlows.length) flowLines.push(marketHeat.flow_line);
+  topFlows.forEach(item => {
+    const trend = formatHeatTrendTag(item, previousFlowMap.get(item?.sector));
+    const upCount = Number(nextTrendState[item?.sector || '']?.up || 0);
+    const detail = [
+      item?.sector || '—',
+      item?.flow_state || '',
+      trend,
+      upCount >= 2 ? `连升 ${upCount}` : '',
+      item?.net_flow_label || item?.net_flow || '',
+    ].filter(Boolean).join(' | ');
+    const leaders = Array.isArray(item?.leaders)
+      ? item.leaders.slice(0, 2).map(lead => lead?.symbol).filter(Boolean).join(', ')
+      : '';
+    flowLines.push([detail, leaders ? `关注 ${leaders}` : ''].filter(Boolean).join('\n'));
+  });
+
+  $('market-heat-sector').textContent = summarizePanelLines(sectorLines, '暂无热点结果', 6);
+  $('market-heat-news').textContent = summarizePanelLines(newsLines, '暂无热点新闻', 6);
+  $('market-heat-flow').textContent = summarizePanelLines(flowLines, '暂无资金动向', 6);
+  window.__lastMarketHeatSnapshot = marketHeat || {};
+  window.__marketHeatTrendState = nextTrendState;
+}
+
 const SCAN_REFRESH_INTERVAL_MINUTES = 15;
 const SCAN_REFRESH_INTERVAL_MS = SCAN_REFRESH_INTERVAL_MINUTES * 60 * 1000;
 let scanRefreshTimer = null;
@@ -3326,7 +3548,8 @@ function renderDistillate(distillate = {}){
   latestDistillate = distillate || {};
   const essence = summarizeDistillateList(latestDistillate.essence, '等待蒸馏结果');
   const playbook = summarizeDistillateList(latestDistillate.playbook, '等待蒸馏结果');
-  const avoid = summarizeDistillateList(latestDistillate.avoid, '暂无明确规避项');
+  const feedbackSummary = summarizeDistillateList(latestDistillate.feedback_summary, '');
+  const avoid = [summarizeDistillateList(latestDistillate.avoid, '暂无明确规避项'), feedbackSummary].filter(Boolean).join('\n\n');
   const focusSymbols = Array.isArray(latestDistillate.focus_symbols)
     ? latestDistillate.focus_symbols
         .filter(item => item && item.symbol)
@@ -3345,13 +3568,37 @@ function renderDistillate(distillate = {}){
         .slice(0, 3)
         .map(item => `${item.symbol} ${item.direction || ''}`.trim())
     : [];
+  const autoGuard = latestDistillate.auto_guard?.active
+    ? [`风控闸门：${latestDistillate.auto_guard.reason || 'active'}`, `恢复时间：${latestDistillate.auto_guard.until || '—'}`]
+    : [];
+  const marketHeat = latestDistillate.market_heat || {};
+  const heatLines = [];
+  if(marketHeat.updated_at){
+    heatLines.push(`更新 ${String(marketHeat.updated_at).replace('T', ' ').slice(0, 16)}`);
+  }
+  if(marketHeat.sector_line) heatLines.push(`板块: ${marketHeat.sector_line}`);
+  if(marketHeat.flow_line) heatLines.push(`资金: ${marketHeat.flow_line}`);
+  if(marketHeat.news_line) heatLines.push(`新闻: ${marketHeat.news_line}`);
+  const topSectors = Array.isArray(marketHeat.top_sectors)
+    ? marketHeat.top_sectors
+        .slice(0, 3)
+        .map(item => {
+          const leaders = Array.isArray(item.leaders) ? item.leaders.slice(0, 2).map(lead => lead.symbol).filter(Boolean).join(', ') : '';
+          return `${item.sector || '—'}${item.flow_state ? ` ${item.flow_state}` : ''}${leaders ? ` | ${leaders}` : ''}`;
+        })
+    : [];
   $('learning-distillate-essence').textContent = essence;
   $('learning-distillate-playbook').textContent = playbook;
   $('learning-distillate-avoid').textContent = avoid;
   $('learning-distillate-focus').textContent = [
     summarizeDistillateList(focusSymbols, '暂无关注池'),
-    summarizeDistillateList([...pendingSignals, ...pendingForecasts], '暂无待验证项'),
+    summarizeDistillateList([...pendingSignals, ...pendingForecasts, ...autoGuard], '暂无待验证项'),
   ].filter(Boolean).join('\n\n');
+  $('learning-distillate-market-heat').textContent = [
+    summarizeDistillateList(heatLines, '暂无热点结果'),
+    summarizeDistillateList(topSectors, ''),
+  ].filter(Boolean).join('\n\n');
+  renderMarketHeatPanel(marketHeat);
 }
 
 async function refreshDistillate(force=false){
@@ -3366,6 +3613,8 @@ async function refreshDistillate(force=false){
     }
   }catch(e){
     $('learning-distillate-essence').textContent = `蒸馏加载失败：${e.message}`;
+    $('learning-distillate-market-heat').textContent = `热点加载失败：${e.message}`;
+    renderMarketHeatPanel({});
   }
 }
 
@@ -3402,8 +3651,16 @@ function renderLearningProfile(profile = {}){
 
 function setOverview(scan = {}){
   const source = scan?.source ? `${scan.source.history}/${scan.source.options}/${scan.source.spot}` : '--';
-  const bestPlan = scan?.trade_plans?.[0] || scan?.strategy?.best_plan || {};
-  const planText = bestPlan.contract ? `${bestPlan.contract} · RR ${bestPlan.risk_reward != null ? fmt(bestPlan.risk_reward) : '—'}` : '等待扫描';
+  const bestPlan = normalizePlan(scan?.trade_plans?.[0] || scan?.strategy?.best_plan);
+  const actionBrief = (scan?.action_brief && typeof scan.action_brief === 'object') ? scan.action_brief : (scan?.strategy?.action_brief || {});
+  const earningsEvent = (scan?.earnings_event && typeof scan.earnings_event === 'object') ? scan.earnings_event : (scan?.strategy?.earnings_event || {});
+  const planText = bestPlan.contract
+    ? [
+        `${bestPlan.contract} · RR ${bestPlan.risk_reward != null ? fmt(bestPlan.risk_reward) : '—'}`,
+        actionBrief?.summary || '',
+        earningsEvent?.label || '',
+      ].filter(Boolean).join(' · ')
+    : '等待扫描';
   $('overview-symbol').textContent = scan?.symbol || currentSymbol || 'SPY';
   $('overview-source').textContent = source;
   $('overview-ai').textContent = scan?.ai_mode || getSettings().ai_mode || 'single';
@@ -3528,7 +3785,7 @@ async function doScan(){
       fetch(`${API}/api/chart?symbol=${symbol}&kdays=60${settings.enable_webull_market_data ? '&prefer_webull_market=1' : ''}`)
     ]);
 
-    const scan  = await readJsonSafe(scanRes);
+    const scan  = normalizeScanPayload(await readJsonSafe(scanRes));
     const chart = await readJsonSafe(chartRes);
 
     if(scan.error)  throw new Error(scan.error);
@@ -3616,7 +3873,9 @@ function updateStrategy(d){
   const sim = d.sim_learning || {};
   const learning = d.learning_profile || strat.adaptive_learning || {};
   const topContract = strat.top_contract || {};
-  const bestPlan = strat.best_plan || {};
+  const bestPlan = normalizePlan(strat.best_plan);
+  const actionBrief = (d.action_brief && typeof d.action_brief === 'object') ? d.action_brief : (strat.action_brief || {});
+  const earningsEvent = (d.earnings_event && typeof d.earnings_event === 'object') ? d.earnings_event : (strat.earnings_event || {});
   const meta = [
     ['偏向', strat.direction || d.tech_bias || 'neutral'],
     ['DTE', strat.dte_mode || (bestPlan.dte ?? '—')],
@@ -3628,6 +3887,8 @@ function updateStrategy(d){
     ['风控', lib.risk_style || '—'],
     ['模拟盘', sim.closed_count ? `${sim.closed_count} 笔` : '—'],
     ['学习层', learning.closed_count ? `${learning.closed_count} 笔` : '—'],
+    ['执行建议', actionBrief.summary || actionBrief.action || '—'],
+    ['财报事件', earningsEvent.label || '—'],
   ];
 
   let html = `

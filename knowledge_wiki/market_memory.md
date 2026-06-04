@@ -1,108 +1,154 @@
 # Market Memory
 
-## 2026-05-31T04:32:32.943470-04:00 | top50_universe
+## 2026-06-03T19:16:58.831716-04:00 | unusual_daily
 
-- returned: 3 / analyzed_size: 60 / universe_size: 120
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
 - conclusion: direction bullish / structure call / dte mixed
-- DELL: CALL score 95.22 sector Unknown
-- NOW: CALL score 79.56 sector Unknown
-- IBM: CALL score 79.08 sector Unknown
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T04:33:08.526541-04:00 | unusual_daily
+## 2026-06-03T19:17:13.827170-04:00 | market_heat
 
-- returned: 4 / scanned_symbols: 2 / prefiltered_size: 70
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
+
+## 2026-06-03T19:29:22.979758-04:00 | unusual_daily
+
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
 - conclusion: direction bullish / structure call / dte mixed
-- NOW: CALL score 168.21 premium $3.60M
-- DELL: CALL score 162.61 premium $7.22M
-- NOW: CALL score 158.04 premium $879.1K
-- DELL: CALL score 160.04 premium $8.60M
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T04:33:26.541376-04:00 | unusual_daily
+## 2026-06-03T19:29:37.998455-04:00 | market_heat
 
-- returned: 4 / scanned_symbols: 2 / prefiltered_size: 70
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
+
+## 2026-06-03T19:41:56.560464-04:00 | unusual_daily
+
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
 - conclusion: direction bullish / structure call / dte mixed
-- NOW: CALL score 168.21 premium $3.60M
-- DELL: CALL score 162.61 premium $7.22M
-- NOW: CALL score 158.04 premium $879.1K
-- DELL: CALL score 160.04 premium $8.60M
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T08:47:53.037626-04:00 | environment_feedback
+## 2026-06-03T19:42:15.202433-04:00 | market_heat
 
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-- AAPL: success=False edge=-1.05 source=scan env=warm_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T09:07:57.811176-04:00 | environment_feedback
+## 2026-06-03T19:54:44.956289-04:00 | unusual_daily
 
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-- AAPL: success=False edge=-1.05 source=scan env=warm_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T09:14:56.990938-04:00 | environment_feedback
+## 2026-06-03T19:54:59.871275-04:00 | market_heat
 
-- QCOM: success=True edge=5.4 source=unusual env=warm_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T09:16:57.187652-04:00 | environment_feedback
+## 2026-06-03T20:07:11.387735-04:00 | unusual_daily
 
-- APH: success=False edge=-12.65 source=pool env=warm_neutral_bullish
-- APP: success=True edge=7.97 source=pool env=neutral_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T09:18:04.191561-04:00 | environment_feedback
+## 2026-06-03T20:07:27.320353-04:00 | market_heat
 
-- MU: success=True edge=4.59 source=unusual env=neutral_neutral_bullish
-- MU: success=True edge=4.59 source=unusual env=neutral_neutral_bullish
-- MU: success=True edge=4.59 source=unusual env=neutral_neutral_bullish
-- MU: success=True edge=4.59 source=unusual env=neutral_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T09:24:12.578852-04:00 | environment_feedback
+## 2026-06-03T20:19:36.033698-04:00 | unusual_daily
 
-- ORCL: success=True edge=18.23 source=scan env=neutral_neutral_bullish
-- ORCL: success=True edge=18.23 source=scan env=neutral_neutral_bullish
-- ORCL: success=True edge=18.23 source=scan env=neutral_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T09:30:58.305899-04:00 | environment_feedback
+## 2026-06-03T20:19:51.104526-04:00 | market_heat
 
-- MSFT: success=False edge=-9.1 source=unusual env=neutral_neutral_bullish
-- MSFT: success=False edge=-9.1 source=unusual env=neutral_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T09:31:55.944909-04:00 | environment_feedback
+## 2026-06-03T20:32:02.588094-04:00 | unusual_daily
 
-- AAPL: success=False edge=0.62 source=scan env=neutral_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T09:34:58.816240-04:00 | environment_feedback
+## 2026-06-03T20:32:17.892198-04:00 | market_heat
 
-- APP: success=True edge=7.28 source=pool env=neutral_neutral_bullish
-- META: success=False edge=-0.01 source=pool env=neutral_neutral_bullish
-- MU: success=True edge=4.67 source=pool env=neutral_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T09:36:56.549420-04:00 | environment_feedback
+## 2026-06-03T20:44:28.196892-04:00 | unusual_daily
 
-- APP: success=True edge=7.47 source=pool env=neutral_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T09:37:58.369975-04:00 | environment_feedback
+## 2026-06-03T20:44:43.316039-04:00 | market_heat
 
-- MU: success=True edge=4.63 source=unusual env=neutral_neutral_bullish
-- MU: success=True edge=4.63 source=unusual env=neutral_neutral_bullish
-- MU: success=False edge=-4.63 source=unusual env=neutral_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强
 
-## 2026-05-31T10:10:00.349283-04:00 | environment_feedback
+## 2026-06-03T20:56:55.370215-04:00 | unusual_daily
 
-- APP: success=True edge=4.08 source=scan env=neutral_neutral_bullish
-- APP: success=True edge=4.08 source=scan env=neutral_neutral_bullish
+- returned: 9 / scanned_symbols: 3 / prefiltered_size: 24
+- conclusion: direction bullish / structure call / dte mixed
+- META: CALL score 144.01 premium $14.94M
+- NVDA: CALL score 142.27 premium $1.71M
+- MSFT: CALL score 139.71 premium $1.95M
+- META: CALL score 139.2 premium $6.84M
+- NVDA: CALL score 141.51 premium $4.41M
+- MSFT: CALL score 137.76 premium $800.2K
 
-## 2026-05-31T13:49:48.998475-04:00 | environment_feedback
+## 2026-06-03T20:57:11.877928-04:00 | market_heat
 
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-
-## 2026-05-31T14:14:49.510674-04:00 | environment_feedback
-
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-- AAPL: success=True edge=1.05 source=scan env=warm_neutral_bullish
-
-## 2026-06-01T01:33:04.259657-04:00 | environment_feedback
-
-- PLTR: success=True edge=9.21 source=unusual env=warm_neutral_bullish
-- PLTR: success=True edge=9.21 source=unusual env=warm_neutral_bullish
-- PLTR: success=True edge=9.21 source=unusual env=warm_neutral_bullish
-- PLTR: success=True edge=9.21 source=unusual env=warm_neutral_bullish
-- PLTR: success=True edge=9.21 source=pool env=warm_neutral_bullish
-- ORCL: success=True edge=10.84 source=pool env=warm_neutral_bullish
+- sectors: Consumer Tech x1 / AI / Compute x1 / TECHNOLOGY x1
+- news: 暂无可用新闻
+- flow: Consumer Tech 资金偏强 / AI / Compute 资金偏强 / TECHNOLOGY 资金偏强

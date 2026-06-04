@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 from config import MAX_DTE, MIN_DTE, OTM_RANGE_PCT
@@ -24,6 +25,27 @@ def _safe_ticker_info(symbol: str) -> dict:
         return yf.Ticker(symbol).info or {}
     except Exception as exc:
         logger.debug("%s info fetch failed: %s", symbol, exc)
+        return {}
+
+
+def _alpha_company_overview(symbol: str) -> dict:
+    webapp = _load_app_module()
+    key = getattr(webapp, "ALPHAVANTAGE_API_KEY", "").strip()
+    if not key:
+        return {}
+    try:
+        resp = requests.get(
+            "https://www.alphavantage.co/query",
+            params={"function": "OVERVIEW", "symbol": symbol, "apikey": key},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        payload = resp.json() or {}
+        if not isinstance(payload, dict) or payload.get("Note") or payload.get("Information"):
+            return {}
+        return payload
+    except Exception as exc:
+        logger.debug("%s alpha overview failed: %s", symbol, exc)
         return {}
 
 
@@ -101,15 +123,19 @@ def get_stock_info(symbol: str) -> dict:
 
 
 def get_company_profile(symbol: str) -> dict:
-    info = _safe_ticker_info(symbol)
+    alpha = _alpha_company_overview(symbol)
+    info = {}
+    if not alpha or not alpha.get("Sector") or not alpha.get("Industry") or not alpha.get("Name"):
+        info = _safe_ticker_info(symbol)
     return {
         "symbol": symbol,
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "long_name": info.get("longName") or info.get("shortName") or symbol,
-        "market_cap": info.get("marketCap"),
+        "sector": info.get("sector") or alpha.get("Sector"),
+        "industry": info.get("industry") or alpha.get("Industry"),
+        "long_name": info.get("longName") or info.get("shortName") or alpha.get("Name") or symbol,
+        "market_cap": info.get("marketCap") or alpha.get("MarketCapitalization"),
         "average_volume": info.get("averageVolume"),
-        "beta": info.get("beta"),
+        "beta": info.get("beta") or alpha.get("Beta"),
+        "profile_source": "yahoo" if info else ("alphavantage" if alpha else None),
     }
 
 
@@ -159,7 +185,7 @@ def _yahoo_option_chain(symbol: str, spot: float) -> Optional[pd.DataFrame]:
     try:
         all_expiries = ticker.options
     except Exception as exc:
-        logger.warning("%s yahoo options unavailable: %s", symbol, exc)
+        logger.debug("%s yahoo options unavailable: %s", symbol, exc)
         return None
 
     if not all_expiries:
@@ -175,7 +201,7 @@ def _yahoo_option_chain(symbol: str, spot: float) -> Optional[pd.DataFrame]:
         try:
             chain = ticker.option_chain(exp_str)
         except Exception as exc:
-            logger.warning("%s %s yahoo option fetch failed: %s", symbol, exp_str, exc)
+            logger.debug("%s %s yahoo option fetch failed: %s", symbol, exp_str, exc)
             continue
 
         for opt_type, df in (("call", chain.calls), ("put", chain.puts)):
